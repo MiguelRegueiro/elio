@@ -1443,6 +1443,10 @@ fn help_overlay_keeps_controls_readable_and_drops_auto_reload_row() {
         "expected help overlay to list the vertical preview scroll keys, got: {rendered:?}"
     );
     assert!(
+        rendered.contains("H / L") && !rendered.contains("Shift+H / Shift+L"),
+        "expected help overlay to use standard uppercase notation for horizontal preview scroll keys, got: {rendered:?}"
+    );
+    assert!(
         rendered.contains("View"),
         "expected help overlay to include the View section header, got: {rendered:?}"
     );
