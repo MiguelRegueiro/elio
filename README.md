@@ -58,9 +58,9 @@ curl -fsSL https://elio-fm.github.io/elio-apt/install.sh | sudo sh
 sudo apt install elio
 ```
 
-Manual repository setup is available in [`elio-apt`](https://github.com/elio-fm/elio-apt). To install without adding a repository, download `elio_amd64.deb` from the [latest release](https://github.com/elio-fm/elio/releases/latest).
+Manual repository setup is available in [`elio-apt`](https://github.com/elio-fm/elio-apt). To install without adding a repository, download the `.deb` package from the [latest release](https://github.com/elio-fm/elio/releases/latest).
 
-The apt repository currently publishes `amd64` packages.
+The apt repository currently publishes `amd64` and `arm64` packages.
 
 ### Homebrew
 
