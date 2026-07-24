@@ -354,17 +354,7 @@ impl<'a> HelpKeys<'a> {
     fn preview_pair(&self, low: &KeyList, high: &KeyList) -> String {
         let low = self.effective_keys(low);
         let high = self.effective_keys(high);
-        if self.mode.is_chooser() {
-            let low_label = low.to_string();
-            let high_label = high.to_string();
-            match (low_label.is_empty(), high_label.is_empty()) {
-                (true, true) => return String::new(),
-                (true, false) => return high_label,
-                (false, true) => return low_label,
-                (false, false) => {}
-            }
-        }
-        format_preview_scroll_key(&low, &high)
+        format_key_pair(&low, &high)
     }
 
     fn effective_keys(&self, keys: &KeyList) -> KeyList {
@@ -427,20 +417,6 @@ fn format_key_pair(first: &crate::config::KeyList, second: &crate::config::KeyLi
         (first, second) if first.is_empty() => second,
         (first, second) if second.is_empty() => first,
         (first, second) => format!("{first} / {second}"),
-    }
-}
-
-/// Render a preview-scroll key pair: defaults like 'H'/'L' show as "Shift+H / Shift+L";
-/// overrides such as '<'/'>' show as "< / >".
-fn format_preview_scroll_key(
-    low: &crate::config::KeyList,
-    high: &crate::config::KeyList,
-) -> String {
-    match (low.single_char(), high.single_char()) {
-        (Some(low), Some(high)) if low.is_ascii_uppercase() && high.is_ascii_uppercase() => {
-            format!("Shift+{low} / Shift+{high}")
-        }
-        _ => format!("{low} / {high}"),
     }
 }
 
@@ -765,6 +741,34 @@ choose = ["K", "[", "J", "]"]
         assert_eq!(
             keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
             ""
+        );
+    }
+
+    #[test]
+    fn preview_scroll_help_uses_standard_uppercase_notation() {
+        let kb = KeyBindings::default();
+        let keys = HelpKeys::new(&kb, HelpMode::Normal);
+
+        assert_eq!(
+            keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
+            "K/[ / J/]"
+        );
+        assert_eq!(
+            keys.preview_pair(&kb.scroll_preview_left, &kb.scroll_preview_right),
+            "H / L"
+        );
+
+        let kb = KeyBindings::from_toml_str(
+            r#"[keys]
+scroll_preview_left = "A"
+scroll_preview_right = "B"
+"#,
+        );
+        let keys = HelpKeys::new(&kb, HelpMode::Normal);
+
+        assert_eq!(
+            keys.preview_pair(&kb.scroll_preview_left, &kb.scroll_preview_right),
+            "A / B"
         );
     }
 }

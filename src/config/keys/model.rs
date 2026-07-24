@@ -391,13 +391,6 @@ impl KeyList {
         )
     }
 
-    pub(crate) fn single_char(&self) -> Option<char> {
-        match self.0.as_slice() {
-            [spec] => spec.single_char(),
-            _ => None,
-        }
-    }
-
     pub(crate) fn single_chars(&self) -> impl Iterator<Item = char> + '_ {
         self.0
             .iter()
