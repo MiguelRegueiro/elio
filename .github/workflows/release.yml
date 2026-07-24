@@ -231,6 +231,60 @@ jobs:
           name: release-asset-macos
           path: dist/*.tar.gz
 
+  build-linux-arm64:
+    name: Build release artifact (Linux arm64)
+    needs: validate
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust 1.95.0
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Debian packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils dpkg-dev liblzma-dev pkg-config
+          cargo install --locked cargo-deb --version 3.7.0
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Build Debian package
+        run: |
+          desktop-file-validate packaging/linux/elio.desktop
+          cargo deb --no-build
+          mkdir -p dist
+          cp target/debian/*.deb dist/elio_arm64.deb
+
+      - name: Package Linux artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          bundle_dir="dist/elio-${version}-${host_target}"
+
+          mkdir -p "${bundle_dir}"
+          cp target/release/elio "${bundle_dir}/"
+          cp README.md LICENSE-MIT "${bundle_dir}/"
+          mkdir -p "${bundle_dir}/packaging"
+          cp -R packaging/linux "${bundle_dir}/packaging/"
+          tar -C dist -czf "dist/elio-${version}-${host_target}.tar.gz" "$(basename "${bundle_dir}")"
+
+      - name: Upload Linux arm64 artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-asset-linux-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+
   build-windows:
     name: Build release artifact (Windows)
     needs: validate
@@ -274,6 +328,7 @@ jobs:
     needs:
       - validate
       - build-linux
+      - build-linux-arm64
       - build-macos
       - build-windows
     runs-on: ubuntu-latest
