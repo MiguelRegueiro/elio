@@ -56,7 +56,12 @@ pub(in crate::ui) fn render_body(
     state: &mut FrameState,
     palette: Palette,
 ) {
-    let layout = resolve_body_layout(area, config::layout().panes, app.preview_visible());
+    let layout = resolve_body_layout(
+        area,
+        config::layout().panes,
+        app.preview_visible(),
+        app.preview_fullscreen(),
+    );
 
     if let Some(sidebar) = layout.sidebar {
         render_sidebar(frame, sidebar, app, state, palette);
@@ -73,7 +78,16 @@ pub(super) fn resolve_body_layout(
     area: Rect,
     pane_weights: Option<PaneWeights>,
     preview_visible: bool,
+    preview_fullscreen: bool,
 ) -> BodyLayout {
+    if preview_fullscreen {
+        return BodyLayout {
+            sidebar: None,
+            entries: None,
+            preview: Some(area),
+        };
+    }
+
     if preview_visible {
         pane_weights.map_or_else(
             || legacy_body_layout(area),

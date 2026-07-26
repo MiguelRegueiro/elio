@@ -69,6 +69,21 @@ impl App {
             return Ok(());
         }
 
+        if self.preview_fullscreen() {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.handle_wheel_event(mouse, 1),
+                MouseEventKind::ScrollUp => self.handle_wheel_event(mouse, -1),
+                MouseEventKind::ScrollLeft => self.handle_horizontal_wheel_event(mouse, -1),
+                MouseEventKind::ScrollRight => self.handle_horizontal_wheel_event(mouse, 1),
+                MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                    self.input.hover_panel = self.panel_target_at(mouse.column, mouse.row);
+                    self.update_wheel_target_from_position(mouse.column, mouse.row);
+                }
+                MouseEventKind::Down(_) | MouseEventKind::Up(_) => self.clear_drag_state(),
+            }
+            return Ok(());
+        }
+
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.clear_drag_state();

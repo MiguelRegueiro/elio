@@ -688,6 +688,8 @@ pub(crate) struct NavigationState {
 
 pub(in crate::app) struct PreviewRuntime {
     pub(in crate::app) visible: bool,
+    pub(in crate::app) fullscreen: bool,
+    pub(in crate::app) exit_fullscreen_after_directory_load: bool,
     pub(in crate::app) state: PreviewState,
     pub(in crate::app) comic: comic::ComicPreviewState,
     pub(in crate::app) epub: epub::EpubPreviewState,
@@ -877,6 +879,8 @@ impl App {
             },
             preview: PreviewRuntime {
                 visible: true,
+                fullscreen: false,
+                exit_fullscreen_after_directory_load: false,
                 state: PreviewState {
                     scroll: 0,
                     horizontal_scroll: 0,

@@ -230,6 +230,7 @@ fn wide_browser_layout_uses_default_sidebar_width() {
         },
         None,
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -263,6 +264,7 @@ fn narrowing_horizontal_browser_layout_starts_shrinking_sidebar_early() {
             },
             None,
             true,
+            false,
         );
 
         assert_eq!(
@@ -291,6 +293,7 @@ fn narrow_legacy_layout_keeps_preview_without_starving_files() {
             },
             None,
             true,
+            false,
         );
 
         let entries = layout.entries.expect("entries should be visible");
@@ -334,6 +337,7 @@ fn weighted_layout_splits_three_panes_across_the_available_width() {
             preview: 45,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -363,6 +367,7 @@ fn weighted_layout_can_hide_the_sidebar() {
             preview: 50,
         }),
         true,
+        false,
     );
 
     let entries = layout.entries.expect("entries should be visible");
@@ -391,6 +396,7 @@ fn weighted_layout_hides_the_preview_when_requested() {
             preview: 0,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -403,6 +409,21 @@ fn weighted_layout_hides_the_preview_when_requested() {
 }
 
 #[test]
+fn fullscreen_preview_uses_body_without_browser_panes() {
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 20,
+    };
+    let layout = resolve_body_layout(area, None, true, true);
+
+    assert_eq!(layout.sidebar, None);
+    assert_eq!(layout.entries, None);
+    assert_eq!(layout.preview, Some(area));
+}
+
+#[test]
 fn preview_toggle_hides_preview_without_collapsing_legacy_sidebar() {
     let layout = resolve_body_layout(
         Rect {
@@ -412,6 +433,7 @@ fn preview_toggle_hides_preview_without_collapsing_legacy_sidebar() {
             height: 20,
         },
         None,
+        false,
         false,
     );
 
@@ -433,6 +455,7 @@ fn preview_toggle_keeps_icon_sidebar_at_stacked_breakpoint_width() {
             height: 20,
         },
         None,
+        false,
         false,
     );
 
@@ -459,6 +482,7 @@ fn preview_toggle_hides_preview_without_changing_config_weights() {
             preview: 45,
         }),
         false,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -483,6 +507,7 @@ fn weighted_layout_uses_horizontal_layout_when_visible_panes_fit_minimums() {
             preview: 45,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -512,6 +537,7 @@ fn weighted_layout_stacks_preview_when_width_is_tight_and_height_is_sufficient()
             preview: 45,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -540,6 +566,7 @@ fn weighted_stacked_layout_respects_file_and_preview_height_weights() {
             preview: 70,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -568,6 +595,7 @@ fn weighted_stacked_layout_can_favor_files_over_preview() {
             preview: 30,
         }),
         true,
+        false,
     );
 
     let entries = layout.entries.expect("entries should be visible");
@@ -594,6 +622,7 @@ fn weighted_layout_avoids_stacking_when_height_is_too_limited() {
             preview: 45,
         }),
         true,
+        false,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -1522,6 +1551,10 @@ fn help_overlay_keeps_controls_readable_and_drops_auto_reload_row() {
     assert!(
         rendered.contains("H / L") && !rendered.contains("Shift+H / Shift+L"),
         "expected help overlay to use standard uppercase notation for horizontal preview scroll keys, got: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("symlink relative"),
+        "expected help overlay to keep the final clipboard entry visible without clipping, got: {rendered:?}"
     );
     assert!(
         rendered.contains("View"),
