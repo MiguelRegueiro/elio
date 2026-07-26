@@ -75,6 +75,8 @@ impl App {
                     match build.result {
                         Ok(snapshot) => self.apply_directory_snapshot(load, snapshot),
                         Err(error) => {
+                            self.preview.exit_fullscreen_after_directory_load = false;
+                            self.exit_fullscreen_preview();
                             self.status = format!("Cannot open {}: {}", build.cwd.display(), error);
                         }
                     }

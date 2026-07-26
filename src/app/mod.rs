@@ -53,13 +53,16 @@ pub use crate::core::SidebarItem;
 pub use crate::core::{Entry, EntryKind, SidebarItemKind, SidebarRow, SortMode};
 
 impl App {
-    pub fn set_frame_state(&mut self, frame_state: FrameState) -> bool {
+    pub fn set_frame_state(&mut self, mut frame_state: FrameState) -> bool {
         let previous_code_line_limit = self.selected_entry().map(|entry| {
             self.preview_code_line_limit_for_entry_with_rows(
                 entry,
                 self.input.frame_state.preview_rows_visible,
             )
         });
+        if self.preview_fullscreen() && frame_state.entries_panel.is_none() {
+            frame_state.metrics = self.input.frame_state.metrics;
+        }
         self.input.frame_state = frame_state;
         let mut dirty = self.sync_scroll() | self.sync_search_scroll() | self.sync_preview_scroll();
         let next_code_line_limit = self.selected_entry().map(|entry| {
@@ -138,9 +141,60 @@ impl App {
         self.preview.visible
     }
 
+    pub(crate) fn preview_fullscreen(&self) -> bool {
+        self.preview.visible && self.preview.fullscreen
+    }
+
+    pub(in crate::app) fn toggle_fullscreen_preview(&mut self) {
+        if preview_pane_disabled_by_layout(config::layout()) {
+            self.preview.visible = false;
+            self.preview.fullscreen = false;
+            self.status = "Preview pane disabled in config".to_string();
+            return;
+        }
+
+        if !self.preview.visible {
+            self.preview.visible = true;
+            self.refresh_preview();
+        }
+
+        let next_fullscreen = !self.preview.fullscreen;
+        if self.preview.fullscreen != next_fullscreen {
+            self.queue_terminal_image_geometry_clear();
+        }
+        self.preview.fullscreen = next_fullscreen;
+        self.status = if self.preview.fullscreen {
+            "Fullscreen preview"
+        } else {
+            "Exited fullscreen preview"
+        }
+        .to_string();
+    }
+
+    pub(in crate::app) fn exit_fullscreen_preview(&mut self) -> bool {
+        if self.clear_fullscreen_preview() {
+            self.status = "Exited fullscreen preview".to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::app) fn clear_fullscreen_preview(&mut self) -> bool {
+        if self.preview.fullscreen {
+            self.queue_terminal_image_geometry_clear();
+            self.preview.fullscreen = false;
+            self.preview.exit_fullscreen_after_directory_load = false;
+            true
+        } else {
+            false
+        }
+    }
+
     pub(in crate::app) fn toggle_preview_pane(&mut self) {
         if preview_pane_disabled_by_layout(config::layout()) {
             self.preview.visible = false;
+            self.preview.fullscreen = false;
             self.status = "Preview pane disabled in config".to_string();
             return;
         }
@@ -150,6 +204,7 @@ impl App {
             self.refresh_preview();
             self.status = "Preview shown".to_string();
         } else {
+            self.preview.fullscreen = false;
             self.status = "Preview hidden".to_string();
         }
     }

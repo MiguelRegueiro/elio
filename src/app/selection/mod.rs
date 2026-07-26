@@ -39,7 +39,7 @@ impl App {
         let path = entry.path.clone();
         if self.navigation.selected_paths.remove(&path) {
             self.status.clear();
-            if self.navigation.view_mode == ViewMode::List {
+            if self.navigation.view_mode == ViewMode::List && !self.preview_fullscreen() {
                 self.move_vertical(1);
             }
             return;
@@ -52,7 +52,7 @@ impl App {
 
         self.navigation.selected_paths.insert(path);
         self.status.clear();
-        if self.navigation.view_mode == ViewMode::List {
+        if self.navigation.view_mode == ViewMode::List && !self.preview_fullscreen() {
             self.move_vertical(1);
         }
     }

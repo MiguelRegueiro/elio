@@ -187,7 +187,7 @@ impl App {
     pub(crate) fn handle_terminal_image_resize(&mut self) {
         self.refresh_terminal_image_window_size();
         self.arm_terminal_image_resize_settle();
-        self.queue_terminal_image_resize_clear();
+        self.queue_terminal_image_geometry_clear();
         self.handle_pdf_overlay_resize();
     }
 
@@ -196,7 +196,7 @@ impl App {
         self.refresh_terminal_image_window_size();
         if self.preview.terminal_images.window != previous_window {
             self.arm_terminal_image_resize_settle();
-            self.queue_terminal_image_resize_clear();
+            self.queue_terminal_image_geometry_clear();
             self.handle_pdf_overlay_resize();
         }
     }
@@ -243,7 +243,7 @@ impl App {
             .map(|settled_at| settled_at.saturating_duration_since(Instant::now()))
     }
 
-    fn queue_terminal_image_resize_clear(&mut self) {
+    pub(in crate::app) fn queue_terminal_image_geometry_clear(&mut self) {
         if matches!(
             self.preview.terminal_images.protocol,
             ImageProtocol::KittyGraphics | ImageProtocol::ItermInline | ImageProtocol::Sixel

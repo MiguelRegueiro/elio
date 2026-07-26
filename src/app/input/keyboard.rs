@@ -164,6 +164,10 @@ impl App {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            if self.exit_fullscreen_preview() {
+                return Ok(());
+            }
+
             if let Some(prog) = &self.jobs.trash_progress {
                 self.jobs.scheduler.cancel_trash(self.jobs.trash_token);
                 if prog.permanent {
@@ -225,6 +229,51 @@ impl App {
         } else {
             crate::config::keys().action_for_key_in_context(key, self.key_context())
         };
+
+        if self.preview_fullscreen() {
+            if matches!(key.code, KeyCode::Esc) {
+                self.exit_fullscreen_preview();
+                return Ok(());
+            }
+
+            if is_help_shortcut(key) {
+                self.clear_wheel_scroll();
+                self.overlays.help_scroll = 0;
+                self.overlays.help = true;
+                return Ok(());
+            }
+
+            if let Some(action) = configured_action {
+                match fullscreen_preview_action_policy(self, action) {
+                    FullscreenPreviewActionPolicy::HandleInFullscreen => {
+                        self.dispatch_action(action)?;
+                    }
+                    FullscreenPreviewActionPolicy::ExitThenDispatch => {
+                        self.exit_fullscreen_preview();
+                        self.dispatch_action(action)?;
+                    }
+                    FullscreenPreviewActionPolicy::DispatchThenExit => {
+                        let status_before = self.status.clone();
+                        self.dispatch_action(action)?;
+                        if self.navigation.directory_runtime.pending_load.is_some() {
+                            self.preview.exit_fullscreen_after_directory_load = true;
+                        } else if self.clear_fullscreen_preview() && self.status == status_before {
+                            self.status = "Exited fullscreen preview".to_string();
+                        }
+                    }
+                    FullscreenPreviewActionPolicy::DispatchAndStayInFullscreen => {
+                        self.dispatch_action(action)?;
+                        if self.navigation.directory_runtime.pending_load.is_some() {
+                            self.preview.exit_fullscreen_after_directory_load = true;
+                        }
+                    }
+                    FullscreenPreviewActionPolicy::Block => {}
+                }
+                return Ok(());
+            }
+
+            return Ok(());
+        }
 
         if should_use_grid_zoom_for_symlink_key(self, key, configured_action) {
             self.adjust_zoom(-1);
@@ -365,6 +414,7 @@ impl App {
             Action::Sort => self.cycle_sort_mode()?,
             Action::ToggleView => self.toggle_view_mode(),
             Action::TogglePreview => self.toggle_preview_pane(),
+            Action::FullscreenPreview => self.toggle_fullscreen_preview(),
             Action::ToggleHidden => self.toggle_hidden_files()?,
             Action::NavLeft => {
                 if self.navigation.view_mode == ViewMode::Grid {
@@ -471,6 +521,107 @@ impl App {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FullscreenPreviewActionPolicy {
+    HandleInFullscreen,
+    ExitThenDispatch,
+    DispatchThenExit,
+    DispatchAndStayInFullscreen,
+    Block,
+}
+
+fn fullscreen_preview_action_policy(
+    app: &App,
+    action: crate::config::Action,
+) -> FullscreenPreviewActionPolicy {
+    use crate::config::Action;
+    match action {
+        Action::FullscreenPreview
+        | Action::TogglePreview
+        | Action::Quit
+        | Action::QuitWithoutCd
+        | Action::ScrollPreviewLeft
+        | Action::ScrollPreviewRight
+        | Action::ScrollPreviewUp
+        | Action::ScrollPreviewDown => FullscreenPreviewActionPolicy::HandleInFullscreen,
+        Action::OpenOrEnter if app.selected_entry().is_some_and(|entry| entry.is_dir()) => {
+            FullscreenPreviewActionPolicy::DispatchThenExit
+        }
+        action if fullscreen_preview_dispatches_and_stays(action) => {
+            FullscreenPreviewActionPolicy::DispatchAndStayInFullscreen
+        }
+        Action::NavLeft | Action::NavRight if app.navigation.view_mode == ViewMode::Grid => {
+            FullscreenPreviewActionPolicy::DispatchAndStayInFullscreen
+        }
+        action if fullscreen_preview_dispatches_then_exits(action) => {
+            FullscreenPreviewActionPolicy::DispatchThenExit
+        }
+        Action::OpenOrEnter => FullscreenPreviewActionPolicy::ExitThenDispatch,
+        action if fullscreen_preview_exits_then_dispatches(action) => {
+            FullscreenPreviewActionPolicy::ExitThenDispatch
+        }
+        _ => FullscreenPreviewActionPolicy::Block,
+    }
+}
+
+fn fullscreen_preview_dispatches_then_exits(action: crate::config::Action) -> bool {
+    use crate::config::Action;
+    matches!(
+        action,
+        Action::CyclePlacesNext
+            | Action::CyclePlacesPrevious
+            | Action::GoParent
+            | Action::HistoryBack
+            | Action::HistoryForward
+            | Action::NavLeft
+            | Action::NavRight
+    )
+}
+
+fn fullscreen_preview_dispatches_and_stays(action: crate::config::Action) -> bool {
+    use crate::config::Action;
+    matches!(
+        action,
+        Action::ToggleSelection
+            | Action::PageUp
+            | Action::PageDown
+            | Action::JumpFirst
+            | Action::JumpLast
+            | Action::NavDown
+            | Action::NavUp
+    )
+}
+
+fn fullscreen_preview_exits_then_dispatches(action: crate::config::Action) -> bool {
+    use crate::config::Action;
+    matches!(
+        action,
+        Action::Yank
+            | Action::Cut
+            | Action::Paste
+            | Action::Trash
+            | Action::DeletePermanently
+            | Action::SymlinkAbsolute
+            | Action::SymlinkRelative
+            | Action::SelectAll
+            | Action::CopyPath
+            | Action::SearchFolders
+            | Action::SearchFiles
+            | Action::FilterDirectory
+            | Action::GoTo
+            | Action::OpenWith
+            | Action::Open
+            | Action::Zoxide
+            | Action::Shell
+            | Action::Create
+            | Action::Rename
+            | Action::RenameInEditor
+            | Action::CreateArchive
+            | Action::ExtractArchive
+            | Action::RestoreFromTrash
+    )
+}
+
 fn should_handle_high_frequency_horizontal_key(
     key: KeyEvent,
     configured_action: Option<crate::config::Action>,
@@ -545,5 +696,85 @@ mod tests {
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT),
             Some(Action::HistoryBack),
         ));
+    }
+
+    #[test]
+    fn fullscreen_preview_explicit_commands_exit_before_dispatch() {
+        for action in [
+            Action::Yank,
+            Action::Cut,
+            Action::Paste,
+            Action::Trash,
+            Action::DeletePermanently,
+            Action::SymlinkAbsolute,
+            Action::SymlinkRelative,
+            Action::SelectAll,
+            Action::CopyPath,
+            Action::SearchFolders,
+            Action::SearchFiles,
+            Action::FilterDirectory,
+            Action::GoTo,
+            Action::OpenWith,
+            Action::Open,
+            Action::Zoxide,
+            Action::Shell,
+            Action::Create,
+            Action::Rename,
+            Action::RenameInEditor,
+            Action::CreateArchive,
+            Action::ExtractArchive,
+            Action::RestoreFromTrash,
+        ] {
+            assert!(
+                fullscreen_preview_exits_then_dispatches(action),
+                "{action:?} should be allowed from fullscreen preview"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_preview_navigation_dispatches_before_exit() {
+        for action in [
+            Action::CyclePlacesNext,
+            Action::CyclePlacesPrevious,
+            Action::GoParent,
+            Action::HistoryBack,
+            Action::HistoryForward,
+            Action::NavLeft,
+            Action::NavRight,
+        ] {
+            assert!(
+                fullscreen_preview_dispatches_then_exits(action),
+                "{action:?} should dispatch before leaving fullscreen preview"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_preview_same_directory_navigation_stays_fullscreen() {
+        for action in [
+            Action::ToggleSelection,
+            Action::PageUp,
+            Action::PageDown,
+            Action::JumpFirst,
+            Action::JumpLast,
+            Action::NavDown,
+            Action::NavUp,
+        ] {
+            assert!(
+                fullscreen_preview_dispatches_and_stays(action),
+                "{action:?} should dispatch without leaving fullscreen preview"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_preview_keeps_hidden_browser_mutations_blocked() {
+        for action in [Action::Sort, Action::ToggleView, Action::ToggleHidden] {
+            assert!(
+                !fullscreen_preview_exits_then_dispatches(action),
+                "{action:?} should stay blocked from fullscreen preview"
+            );
+        }
     }
 }

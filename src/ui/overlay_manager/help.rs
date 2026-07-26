@@ -78,6 +78,7 @@ pub(super) fn render_help(
             "scroll left / right",
         ),
         keys.action(&kb.toggle_preview, "toggle preview pane"),
+        keys.action(&kb.fullscreen_preview, "fullscreen preview"),
     ]);
     let mouse_entries = vec![
         e("Click", "select item"),
@@ -128,7 +129,7 @@ pub(super) fn render_help(
     } else {
         area.width.saturating_sub(4).clamp(44, 90)
     };
-    let popup_height = area.height.saturating_sub(3).clamp(9, 37);
+    let popup_height = area.height.saturating_sub(2).clamp(9, 38);
     let popup = helpers::centered_rect(area, popup_width, popup_height);
     state.help_panel = Some(popup);
     frame.render_widget(Clear, popup);
@@ -626,7 +627,7 @@ mod tests {
 go_to = "u"
 toggle_selection = "t"
 cycle_places_next = "n"
-cycle_places_previous = "P"
+cycle_places_previous = "N"
 page_up = "<"
 page_down = ">"
 jump_first = "1"
@@ -644,7 +645,7 @@ history_forward = "alt+l"
         assert_eq!(entry_key(&navigation, "first item"), "1");
         assert_eq!(entry_key(&navigation, "last item"), "2");
         assert_eq!(entry_key(&navigation, "page up / down"), "< / >");
-        assert_eq!(entry_key(&navigation, "cycle places"), "n / P");
+        assert_eq!(entry_key(&navigation, "cycle places"), "n / N");
         assert_eq!(entry_key(&navigation, "back / forward"), "Alt+H / Alt+L");
         assert_eq!(entry_key(&clipboard, "toggle selection"), "t");
         assert_eq!(entry_key(&clipboard, "select all"), "A");

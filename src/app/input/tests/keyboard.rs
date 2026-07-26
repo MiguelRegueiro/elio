@@ -275,6 +275,443 @@ fn capital_v_toggles_preview_pane() {
 }
 
 #[test]
+fn capital_p_enters_and_escape_keys_exit_fullscreen_preview() {
+    let root = temp_path("fullscreen-preview");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    assert!(app.preview_visible());
+    assert!(!app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    assert!(app.preview_visible());
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.status_message(), "Fullscreen preview");
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("Esc should leave fullscreen preview");
+    assert!(app.preview_visible());
+    assert!(!app.preview_fullscreen());
+    assert_eq!(app.status_message(), "Exited fullscreen preview");
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview again");
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+    )))
+    .expect("Ctrl+C should leave fullscreen preview");
+    assert!(app.preview_visible());
+    assert!(!app.preview_fullscreen());
+    assert_eq!(app.status_message(), "Exited fullscreen preview");
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn fullscreen_preview_ignores_hidden_browser_actions_but_keeps_preview_controls() {
+    let root = temp_path("fullscreen-preview-input");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let alpha = root.join("alpha.txt");
+    let beta = root.join("beta.txt");
+    let contents = (0..120)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&alpha, &contents).expect("failed to write alpha");
+    fs::write(&beta, "beta").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.navigation.view_mode = ViewMode::List;
+    wait_for_directory_load(&mut app);
+    let alpha_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == alpha)
+        .expect("alpha should be visible");
+    app.select_index(alpha_index);
+    app.set_frame_state(FrameState {
+        preview_panel: Some(Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 20,
+        }),
+        preview_rows_visible: 16,
+        preview_cols_visible: 58,
+        ..FrameState::default()
+    });
+    app.preview.state.content = crate::preview::PreviewContent::new(
+        crate::preview::PreviewKind::Text,
+        (0..120)
+            .map(|i| ratatui::text::Line::from(format!("line {i}")))
+            .collect(),
+    );
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('s'))))
+        .expect("sort should be ignored in fullscreen preview");
+    assert_eq!(app.navigation.selected_paths.len(), 0);
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('?'))))
+        .expect("help should open in fullscreen preview");
+    assert!(app.overlays.help);
+    assert!(app.preview_fullscreen());
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("Esc should close help overlay first");
+    assert!(!app.overlays.help);
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('J'),
+        KeyModifiers::SHIFT,
+    )))
+    .expect("preview scroll should work in fullscreen preview");
+    assert!(app.preview.state.scroll > 0);
+    assert_eq!(app.navigation.selected, alpha_index);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('j'))))
+        .expect("j should navigate inside fullscreen preview");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.selected, alpha_index + 1);
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn fullscreen_preview_preserves_browser_viewport_to_avoid_exit_flicker() {
+    let root = temp_path("fullscreen-preview-exit-viewport");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    for name in ["alpha.txt", "beta.txt", "logo.png"] {
+        fs::write(root.join(name), name).expect("failed to write temp file");
+    }
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    app.set_frame_state(FrameState {
+        entries_panel: Some(Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        }),
+        metrics: ViewMetrics {
+            cols: 1,
+            rows_visible: 18,
+        },
+        ..FrameState::default()
+    });
+    let logo_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == root.join("logo.png"))
+        .expect("logo should be visible");
+    app.select_index(logo_index);
+    assert_eq!(app.navigation.scroll_row, 0);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.set_frame_state(FrameState {
+        preview_panel: Some(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 20,
+        }),
+        preview_rows_visible: 18,
+        preview_cols_visible: 78,
+        ..FrameState::default()
+    });
+
+    assert_eq!(
+        app.navigation.scroll_row, 0,
+        "fullscreen frames should not collapse the browser viewport to the selected row"
+    );
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("Esc should leave fullscreen preview");
+    assert_eq!(app.navigation.scroll_row, 0);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn fullscreen_preview_exits_for_selection_actions() {
+    let root = temp_path("fullscreen-preview-selection-actions");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    fs::write(root.join("alpha.txt"), "alpha").expect("failed to write file");
+    fs::write(root.join("beta.txt"), "beta").expect("failed to write file");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    let selected = app
+        .selected_entry()
+        .expect("entry should be selected")
+        .path
+        .clone();
+
+    let selected_index = app.navigation.selected;
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char(' '))))
+        .expect("ToggleSelection should stay fullscreen and toggle selection");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.selected, selected_index);
+    assert!(app.navigation.selected_paths.contains(&selected));
+
+    app.clear_selection();
+    app.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL,
+    )))
+    .expect("SelectAll should exit fullscreen and select visible entries");
+    assert!(!app.preview_fullscreen());
+    assert_eq!(
+        app.navigation.selected_paths.len(),
+        app.navigation.entries.len()
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn fullscreen_preview_stays_for_same_directory_navigation() {
+    let root = temp_path("fullscreen-preview-same-directory-navigation");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    for name in ["alpha.txt", "beta.txt", "gamma.txt", "omega.txt"] {
+        fs::write(root.join(name), name).expect("failed to write file");
+    }
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    app.navigation.view_mode = ViewMode::List;
+    app.set_frame_state(FrameState {
+        metrics: ViewMetrics {
+            cols: 1,
+            rows_visible: 2,
+        },
+        ..FrameState::default()
+    });
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::End)))
+        .expect("JumpLast should stay fullscreen and select last entry");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.selected, app.navigation.entries.len() - 1);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::PageUp)))
+        .expect("PageUp should stay fullscreen and move selection");
+    assert!(app.preview_fullscreen());
+    assert!(app.navigation.selected < app.navigation.entries.len() - 1);
+
+    app.navigation.view_mode = ViewMode::Grid;
+    app.set_frame_state(FrameState {
+        metrics: ViewMetrics {
+            cols: 2,
+            rows_visible: 2,
+        },
+        ..FrameState::default()
+    });
+    app.select_index(0);
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Right)))
+        .expect("grid NavRight should stay fullscreen and move selection");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.selected, 1);
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Left)))
+        .expect("grid NavLeft should stay fullscreen and move selection");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.selected, 0);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn fullscreen_preview_exits_for_explicit_overlays_and_terminal_tasks() {
+    let root = temp_path("fullscreen-preview-explicit-actions");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let file_path = root.join("note.txt");
+    fs::write(&file_path, "hello").expect("failed to write file");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('c'))))
+        .expect("CopyPath should exit fullscreen and open copy overlay");
+    assert!(!app.preview_fullscreen());
+    assert!(app.copy_is_open());
+    app.overlays.copy = None;
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('z'))))
+        .expect("Zoxide should exit fullscreen and queue zoxide picker");
+    assert!(!app.preview_fullscreen());
+    assert_eq!(app.pending_terminal_task, Some(PendingTerminalTask::Zoxide));
+    app.pending_terminal_task = None;
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('y'))))
+        .expect("Yank should exit fullscreen and yank focused entry");
+    assert!(!app.preview_fullscreen());
+    let clipboard = app
+        .jobs
+        .clipboard
+        .as_ref()
+        .expect("yank should set clipboard");
+    assert_eq!(clipboard.op, ClipOp::Yank);
+    assert_eq!(clipboard.paths, vec![file_path]);
+    app.jobs.clipboard = None;
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('d'))))
+        .expect("Trash should exit fullscreen and open trash prompt");
+    assert!(!app.preview_fullscreen());
+    assert!(app.trash_is_open());
+
+    fs::remove_dir_all(root).ok();
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn fullscreen_preview_allows_file_open_and_exits_first() {
+    let root = temp_path("fullscreen-preview-open-file");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let file_path = root.join("note.txt");
+    fs::write(&file_path, "hello").expect("failed to write temp file");
+    let capture = root.join("capture.txt");
+    let _capture_guard = OpenInSystemCaptureGuard::install(capture.clone());
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    let file_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == file_path)
+        .expect("file should be visible");
+    app.select_index(file_index);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Enter)))
+        .expect("Enter should open selected file from fullscreen preview");
+
+    assert!(!app.preview_fullscreen());
+    let opened = read_open_capture(&capture);
+    assert_eq!(opened, file_path.display().to_string());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn fullscreen_preview_allows_folder_open_and_exits_first() {
+    let root = temp_path("fullscreen-preview-open-folder");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let folder = root.join("folder");
+    fs::create_dir_all(&folder).expect("failed to create folder");
+    let capture = root.join("capture.txt");
+    let _capture_guard = OpenInSystemCaptureGuard::install(capture.clone());
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    let folder_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == folder)
+        .expect("folder should be visible");
+    app.select_index(folder_index);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen folder preview");
+    assert!(app.preview_fullscreen());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('o'))))
+        .expect("Open should launch selected folder from fullscreen preview");
+
+    assert!(!app.preview_fullscreen());
+    assert_eq!(app.navigation.cwd, root);
+    let opened = read_open_capture(&capture);
+    assert_eq!(opened, folder.display().to_string());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn fullscreen_preview_allows_file_open_with_and_directory_enter() {
+    let root = temp_path("fullscreen-preview-open-with");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let folder = root.join("folder");
+    let file_path = root.join("note.txt");
+    fs::create_dir_all(&folder).expect("failed to create folder");
+    fs::write(&file_path, "hello").expect("failed to write temp file");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    let file_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == file_path)
+        .expect("file should be visible");
+    app.select_index(file_index);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('O'))))
+        .expect("Open With should be allowed for files from fullscreen preview");
+    assert!(!app.preview_fullscreen());
+    assert!(app.overlays.open_with.is_some());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("Esc should close Open With overlay");
+    let folder_index = app
+        .navigation
+        .entries
+        .iter()
+        .position(|entry| entry.path == folder)
+        .expect("folder should be visible");
+    app.select_index(folder_index);
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen folder preview");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('O'))))
+        .expect("Open With should be allowed for folders from fullscreen preview");
+    assert!(!app.preview_fullscreen());
+    assert!(app.overlays.open_with.is_some());
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("Esc should close folder Open With overlay");
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
+        .expect("P should fullscreen folder preview again");
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Enter)))
+        .expect("Enter should enter folders before leaving fullscreen");
+    assert!(app.preview_fullscreen());
+    assert_eq!(app.navigation.cwd, root);
+    wait_for_directory_load(&mut app);
+
+    assert!(!app.preview_fullscreen());
+    assert_eq!(app.navigation.cwd, folder);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn q_sets_should_quit() {
     let root = temp_path("quit-shortcut");
     fs::create_dir_all(&root).expect("failed to create temp root");

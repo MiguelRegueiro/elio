@@ -283,6 +283,7 @@ https://elio-fm.github.io/docs/configuration/
 | `Shift+J` / `]` `*` | Step page (PDF, comic, EPUB) or scroll preview down |
 | `Shift+H` / `Shift+L` `*` | Scroll preview left / right |
 | `V` `*` | Show / hide preview pane |
+| `P` `*` | Fullscreen preview |
 
 ### Selection and Clipboard
 

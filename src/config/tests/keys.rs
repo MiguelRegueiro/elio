@@ -10,6 +10,8 @@ fn keys_default_bindings_are_sane() {
     assert_eq!(config.keys.paste, 'p');
     assert_eq!(config.keys.toggle_preview, 'V');
     assert_eq!(config.keys.action_for('V'), Some(Action::TogglePreview));
+    assert_eq!(config.keys.fullscreen_preview, 'P');
+    assert_eq!(config.keys.action_for('P'), Some(Action::FullscreenPreview));
     assert_eq!(config.keys.extract_archive, 'e');
     assert_eq!(config.keys.symlink_absolute, '-');
     assert_eq!(config.keys.symlink_relative, '_');
@@ -50,13 +52,27 @@ fn unknown_keys_are_ignored_without_dropping_valid_overrides() {
         r#"
 [keys]
 open_withh = "w"
-open_with = "P"
+open_with = "M"
 "#,
     )
     .expect("config should parse");
 
-    assert_eq!(config.keys.open_with, 'P');
+    assert_eq!(config.keys.open_with, 'M');
     assert_eq!(config.keys.action_for('w'), None);
+}
+
+#[test]
+fn fullscreen_preview_key_can_be_overridden() {
+    let config = Config::from_str(
+        r#"
+[keys]
+fullscreen_preview = "F"
+"#,
+    )
+    .expect("config should parse");
+
+    assert_eq!(config.keys.action_for('F'), Some(Action::FullscreenPreview));
+    assert_eq!(config.keys.action_for('P'), None);
 }
 
 #[test]

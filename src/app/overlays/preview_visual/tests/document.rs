@@ -712,6 +712,28 @@ fn iterm_modal_repaints_image_when_preview_pane_reappears() {
 }
 
 #[test]
+fn leaving_fullscreen_preview_queues_image_geometry_clear() {
+    let (mut app, root) = build_displayed_iterm_inline_image_app("fullscreen-preview-exit-clear");
+    assert!(app.static_image_overlay_displayed());
+
+    app.preview.fullscreen = true;
+    assert!(
+        app.exit_fullscreen_preview(),
+        "fullscreen exit should report a mode transition"
+    );
+    assert!(
+        app.take_pending_resize_clear(),
+        "image geometry clear should be queued before rendering normal panes"
+    );
+    assert!(
+        !app.static_image_overlay_displayed(),
+        "geometry clear should drop stale fullscreen image target"
+    );
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn resize_settle_holds_image_placement_until_window_expires() {
     let (mut app, root) = build_displayed_iterm_inline_image_app("resize-settle-hold");
 

@@ -240,6 +240,10 @@ impl App {
             DirectoryLoadCompletion::Clear => self.status.clear(),
             DirectoryLoadCompletion::Status(status) => self.status = status,
         }
+
+        if self.preview.exit_fullscreen_after_directory_load {
+            self.clear_fullscreen_preview();
+        }
     }
 
     fn invalidate_search_index_for_directory_snapshot(&mut self, cwd: &Path) {
