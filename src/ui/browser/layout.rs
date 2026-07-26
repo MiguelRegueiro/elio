@@ -56,7 +56,7 @@ pub(in crate::ui) fn render_body(
     state: &mut FrameState,
     palette: Palette,
 ) {
-    let layout = resolve_body_layout(area, config::layout().panes);
+    let layout = resolve_body_layout(area, config::layout().panes, app.preview_visible());
 
     if let Some(sidebar) = layout.sidebar {
         render_sidebar(frame, sidebar, app, state, palette);
@@ -69,11 +69,31 @@ pub(in crate::ui) fn render_body(
     }
 }
 
-pub(super) fn resolve_body_layout(area: Rect, pane_weights: Option<PaneWeights>) -> BodyLayout {
-    pane_weights.map_or_else(
-        || legacy_body_layout(area),
-        |weights| custom_body_layout(area, weights),
-    )
+pub(super) fn resolve_body_layout(
+    area: Rect,
+    pane_weights: Option<PaneWeights>,
+    preview_visible: bool,
+) -> BodyLayout {
+    if preview_visible {
+        pane_weights.map_or_else(
+            || legacy_body_layout(area),
+            |weights| custom_body_layout(area, weights),
+        )
+    } else {
+        pane_weights.map_or_else(
+            || legacy_preview_hidden_body_layout(area),
+            |weights| {
+                custom_body_layout(
+                    area,
+                    PaneWeights {
+                        places: weights.places,
+                        files: weights.files,
+                        preview: 0,
+                    },
+                )
+            },
+        )
+    }
 }
 
 fn legacy_body_layout(area: Rect) -> BodyLayout {
@@ -196,6 +216,28 @@ fn legacy_best_effort_stacked_body_layout(area: Rect) -> Option<BodyLayout> {
         entries: non_empty(entries),
         preview: non_empty(preview),
     })
+}
+
+fn legacy_preview_hidden_body_layout(area: Rect) -> BodyLayout {
+    if let Some((sidebar, entries)) = split_sidebar_and_content_with_comfort(
+        area,
+        LEGACY_WIDE_SIDEBAR_WIDTH,
+        LEGACY_ICON_ONLY_SIDEBAR_WIDTH,
+        LEGACY_MIN_CONTENT_WIDTH_WITH_SIDEBAR,
+        LEGACY_HORIZONTAL_SIDEBAR_SHRINK_START_WIDTH,
+    ) {
+        return BodyLayout {
+            sidebar: non_empty(sidebar),
+            entries: non_empty(entries),
+            preview: None,
+        };
+    }
+
+    BodyLayout {
+        sidebar: None,
+        entries: non_empty(area),
+        preview: None,
+    }
 }
 
 fn legacy_sidebar_and_entries_layout(area: Rect) -> BodyLayout {

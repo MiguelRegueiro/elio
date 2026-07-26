@@ -8,6 +8,8 @@ fn keys_default_bindings_are_sane() {
     assert_eq!(config.keys.yank, 'y');
     assert_eq!(config.keys.cut, 'x');
     assert_eq!(config.keys.paste, 'p');
+    assert_eq!(config.keys.toggle_preview, 'V');
+    assert_eq!(config.keys.action_for('V'), Some(Action::TogglePreview));
     assert_eq!(config.keys.extract_archive, 'e');
     assert_eq!(config.keys.symlink_absolute, '-');
     assert_eq!(config.keys.symlink_relative, '_');

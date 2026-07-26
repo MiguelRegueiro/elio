@@ -537,6 +537,24 @@ fn repeated_present_static_image_overlay_is_a_noop_when_nothing_changed() {
 }
 
 #[test]
+fn newly_shown_static_image_preview_prefers_image_surface_before_frame_area_exists() {
+    let (mut app, root, _image_path) =
+        build_selected_static_image_app("shown-image-surface-before-area", "demo.png");
+
+    app.toggle_preview_pane();
+    app.input.frame_state.preview_content_area = None;
+    app.toggle_preview_pane();
+
+    assert!(app.active_static_image_overlay_request().is_none());
+    assert!(
+        app.preview_will_use_static_image_surface_after_layout(),
+        "first visible frame after showing preview should reserve the image surface instead of drawing text fallback into cells that Kitty will use for placeholders"
+    );
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn kitty_resize_requests_full_screen_clear_for_displayed_overlay() {
     let (mut app, root, _image_path) =
         build_selected_static_image_app("kitty-resize-clear", "demo.png");

@@ -229,6 +229,7 @@ fn wide_browser_layout_uses_default_sidebar_width() {
             height: 20,
         },
         None,
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -261,6 +262,7 @@ fn narrowing_horizontal_browser_layout_starts_shrinking_sidebar_early() {
                 height: 20,
             },
             None,
+            true,
         );
 
         assert_eq!(
@@ -288,6 +290,7 @@ fn narrow_legacy_layout_keeps_preview_without_starving_files() {
                 height,
             },
             None,
+            true,
         );
 
         let entries = layout.entries.expect("entries should be visible");
@@ -330,6 +333,7 @@ fn weighted_layout_splits_three_panes_across_the_available_width() {
             files: 45,
             preview: 45,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -358,6 +362,7 @@ fn weighted_layout_can_hide_the_sidebar() {
             files: 60,
             preview: 50,
         }),
+        true,
     );
 
     let entries = layout.entries.expect("entries should be visible");
@@ -385,6 +390,7 @@ fn weighted_layout_hides_the_preview_when_requested() {
             files: 85,
             preview: 0,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -393,6 +399,72 @@ fn weighted_layout_hides_the_preview_when_requested() {
     assert_eq!(layout.preview, None);
     assert!(sidebar.width >= 16);
     assert!(entries.width >= 28);
+    assert_eq!(sidebar.width + entries.width, 100);
+}
+
+#[test]
+fn preview_toggle_hides_preview_without_collapsing_legacy_sidebar() {
+    let layout = resolve_body_layout(
+        Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        },
+        None,
+        false,
+    );
+
+    let sidebar = layout.sidebar.expect("sidebar should be visible");
+    let entries = layout.entries.expect("entries should be visible");
+
+    assert_eq!(layout.preview, None);
+    assert_eq!(sidebar.width, 19);
+    assert_eq!(sidebar.width + entries.width, 100);
+}
+
+#[test]
+fn preview_toggle_keeps_icon_sidebar_at_stacked_breakpoint_width() {
+    let layout = resolve_body_layout(
+        Rect {
+            x: 0,
+            y: 0,
+            width: 21,
+            height: 20,
+        },
+        None,
+        false,
+    );
+
+    let sidebar = layout.sidebar.expect("icon sidebar should stay visible");
+    let entries = layout.entries.expect("entries should be visible");
+
+    assert_eq!(layout.preview, None);
+    assert_eq!(sidebar.width, 5);
+    assert_eq!(entries.width, 16);
+}
+
+#[test]
+fn preview_toggle_hides_preview_without_changing_config_weights() {
+    let layout = resolve_body_layout(
+        Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        },
+        Some(PaneWeights {
+            places: 15,
+            files: 40,
+            preview: 45,
+        }),
+        false,
+    );
+
+    let sidebar = layout.sidebar.expect("sidebar should be visible");
+    let entries = layout.entries.expect("entries should be visible");
+
+    assert_eq!(layout.preview, None);
     assert_eq!(sidebar.width + entries.width, 100);
 }
 
@@ -410,6 +482,7 @@ fn weighted_layout_uses_horizontal_layout_when_visible_panes_fit_minimums() {
             files: 45,
             preview: 45,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -438,6 +511,7 @@ fn weighted_layout_stacks_preview_when_width_is_tight_and_height_is_sufficient()
             files: 45,
             preview: 45,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -465,6 +539,7 @@ fn weighted_stacked_layout_respects_file_and_preview_height_weights() {
             files: 30,
             preview: 70,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -492,6 +567,7 @@ fn weighted_stacked_layout_can_favor_files_over_preview() {
             files: 70,
             preview: 30,
         }),
+        true,
     );
 
     let entries = layout.entries.expect("entries should be visible");
@@ -517,6 +593,7 @@ fn weighted_layout_avoids_stacking_when_height_is_too_limited() {
             files: 45,
             preview: 45,
         }),
+        true,
     );
 
     let sidebar = layout.sidebar.expect("sidebar should be visible");
@@ -1478,7 +1555,7 @@ fn compact_help_overlay_scrolls_instead_of_truncating_small_terminals() {
     let rendered = buffer_text(terminal.backend().buffer());
 
     assert!(
-        rendered.contains("Navigate"),
+        rendered.contains("Navigation"),
         "compact help should start with the first section, got: {rendered:?}"
     );
     assert!(
@@ -1538,7 +1615,7 @@ fn medium_help_overlay_uses_two_columns_before_scrolling() {
     let rendered = buffer_text(terminal.backend().buffer());
 
     assert!(
-        rendered.contains("Navigate") && rendered.contains("File Actions"),
+        rendered.contains("Navigation") && rendered.contains("File Actions"),
         "medium help should use both sides instead of a sparse single column, got: {rendered:?}"
     );
     assert!(

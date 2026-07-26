@@ -166,7 +166,9 @@ fn render_preview_body(
         return;
     }
 
-    if app.preview_prefers_image_surface() {
+    if app.preview_prefers_image_surface()
+        || app.preview_will_use_static_image_surface_after_layout()
+    {
         if let Some(message) = app.preview_overlay_placeholder_message() {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(

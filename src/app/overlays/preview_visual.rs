@@ -73,7 +73,7 @@ impl App {
     pub(in crate::app) fn active_preview_visual_overlay_request_unchecked(
         &self,
     ) -> Option<images::StaticImageOverlayRequest> {
-        if !self.terminal_image_overlay_available() {
+        if !self.preview.visible || !self.terminal_image_overlay_available() {
             return None;
         }
 

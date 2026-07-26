@@ -274,6 +274,12 @@ pub(super) fn resolve_key_overrides(
             default: defaults.toggle_view.clone(),
         },
         RawBinding {
+            name: "toggle_preview",
+            action: Action::TogglePreview,
+            override_value: overrides.toggle_preview,
+            default: defaults.toggle_preview.clone(),
+        },
+        RawBinding {
             name: "toggle_hidden",
             action: Action::ToggleHidden,
             override_value: overrides.toggle_hidden,
@@ -421,15 +427,16 @@ pub(super) fn resolve_key_overrides(
         history_forward: resolved(35),
         sort: resolved(36),
         toggle_view: resolved(37),
-        toggle_hidden: resolved(38),
-        nav_left: resolved(39),
-        nav_down: resolved(40),
-        nav_up: resolved(41),
-        nav_right: resolved(42),
-        scroll_preview_left: resolved(43),
-        scroll_preview_right: resolved(44),
-        scroll_preview_up: resolved(45),
-        scroll_preview_down: resolved(46),
+        toggle_preview: resolved(38),
+        toggle_hidden: resolved(39),
+        nav_left: resolved(40),
+        nav_down: resolved(41),
+        nav_up: resolved(42),
+        nav_right: resolved(43),
+        scroll_preview_left: resolved(44),
+        scroll_preview_right: resolved(45),
+        scroll_preview_up: resolved(46),
+        scroll_preview_down: resolved(47),
     }
 }
 

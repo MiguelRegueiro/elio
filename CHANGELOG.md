@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a configurable `toggle_preview` (`V`) shortcut to show or hide the preview pane. ([#251])
+
 ## [1.11.2] - 2026-07-22
 
 ### Fixed
@@ -308,6 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.1.0]: https://github.com/elio-fm/elio/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/elio-fm/elio/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/elio-fm/elio/releases/tag/v1.0.0
+[#251]: https://github.com/elio-fm/elio/issues/251
 [#240]: https://github.com/elio-fm/elio/issues/240
 [#235]: https://github.com/elio-fm/elio/issues/235
 [#232]: https://github.com/elio-fm/elio/issues/232

@@ -62,7 +62,7 @@ impl KeyBindings {
             .collect()
     }
 
-    fn bindings(&self) -> [(&KeyList, Action); 47] {
+    fn bindings(&self) -> [(&KeyList, Action); 48] {
         [
             (&self.quit, Action::Quit),
             (&self.quit_without_cd, Action::QuitWithoutCd),
@@ -102,6 +102,7 @@ impl KeyBindings {
             (&self.history_forward, Action::HistoryForward),
             (&self.sort, Action::Sort),
             (&self.toggle_view, Action::ToggleView),
+            (&self.toggle_preview, Action::TogglePreview),
             (&self.toggle_hidden, Action::ToggleHidden),
             (&self.nav_left, Action::NavLeft),
             (&self.nav_down, Action::NavDown),

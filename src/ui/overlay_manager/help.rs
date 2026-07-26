@@ -77,6 +77,7 @@ pub(super) fn render_help(
             &kb.scroll_preview_right,
             "scroll left / right",
         ),
+        keys.action(&kb.toggle_preview, "toggle preview pane"),
     ]);
     let mouse_entries = vec![
         e("Click", "select item"),
@@ -93,12 +94,16 @@ pub(super) fn render_help(
     ];
     let sections = vec![
         HelpSection {
-            title: "Navigate",
+            title: "Navigation",
             entries: navigation_entries,
         },
         HelpSection {
             title: "Mouse",
             entries: mouse_entries,
+        },
+        HelpSection {
+            title: "Preview",
+            entries: preview_entries,
         },
         HelpSection {
             title: "Selection & Clipboard",
@@ -111,10 +116,6 @@ pub(super) fn render_help(
         HelpSection {
             title: "File Actions",
             entries: files_entries,
-        },
-        HelpSection {
-            title: "Preview",
-            entries: preview_entries,
         },
         HelpSection {
             title: "View",
@@ -182,7 +183,7 @@ fn render_wide_help(
         .split(body);
 
     frame.render_widget(
-        Paragraph::new(help_column_lines(cols[0].width, &sections[..3], palette))
+        Paragraph::new(help_column_lines(cols[0].width, &sections[..4], palette))
             .style(Style::default().bg(palette.chrome_alt).fg(palette.text))
             .wrap(Wrap { trim: false }),
         cols[0],
@@ -199,7 +200,7 @@ fn render_wide_help(
     );
 
     frame.render_widget(
-        Paragraph::new(help_column_lines(cols[2].width, &sections[3..], palette))
+        Paragraph::new(help_column_lines(cols[2].width, &sections[4..], palette))
             .style(Style::default().bg(palette.chrome_alt).fg(palette.text))
             .wrap(Wrap { trim: false }),
         cols[2],
@@ -253,8 +254,8 @@ fn flowing_help_lines(
     sections: &[HelpSection],
     palette: Palette,
 ) -> Vec<Line<'static>> {
-    if width >= 70 && sections.len() >= 4 {
-        return two_column_help_lines(width, &sections[..3], &sections[3..], palette);
+    if width >= 70 && sections.len() >= 5 {
+        return two_column_help_lines(width, &sections[..4], &sections[4..], palette);
     }
     help_column_lines(width, sections, palette)
 }
