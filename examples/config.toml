@@ -168,6 +168,7 @@
 # history_forward      = "alt+right"
 # sort                 = "s"
 # toggle_view          = "v"
+# toggle_preview       = "V"
 # toggle_hidden        = "."
 # scroll_preview_up    = ["K", "["]   # Shift+K, [
 # scroll_preview_down  = ["J", "]"]   # Shift+J, ]

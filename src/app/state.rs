@@ -687,6 +687,7 @@ pub(crate) struct NavigationState {
 }
 
 pub(in crate::app) struct PreviewRuntime {
+    pub(in crate::app) visible: bool,
     pub(in crate::app) state: PreviewState,
     pub(in crate::app) comic: comic::ComicPreviewState,
     pub(in crate::app) epub: epub::EpubPreviewState,
@@ -875,6 +876,7 @@ impl App {
                 last_sidebar_refresh_at: Instant::now(),
             },
             preview: PreviewRuntime {
+                visible: true,
                 state: PreviewState {
                     scroll: 0,
                     horizontal_scroll: 0,

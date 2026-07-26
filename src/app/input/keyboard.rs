@@ -364,6 +364,7 @@ impl App {
             Action::HistoryForward => return self.go_forward(),
             Action::Sort => self.cycle_sort_mode()?,
             Action::ToggleView => self.toggle_view_mode(),
+            Action::TogglePreview => self.toggle_preview_pane(),
             Action::ToggleHidden => self.toggle_hidden_files()?,
             Action::NavLeft => {
                 if self.navigation.view_mode == ViewMode::Grid {

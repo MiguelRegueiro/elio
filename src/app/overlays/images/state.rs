@@ -55,6 +55,14 @@ impl App {
             .contains(&StaticImageKey::from_request(&request))
     }
 
+    pub(crate) fn preview_will_use_static_image_surface_after_layout(&self) -> bool {
+        self.preview.visible
+            && self.terminal_image_overlay_available()
+            && self
+                .selected_entry()
+                .is_some_and(|entry| static_image_detail_label(entry).is_some())
+    }
+
     pub(in crate::app) fn static_image_preview_header_detail(&self) -> Option<String> {
         let request = self.active_static_image_overlay_request()?;
         let dimensions = self
@@ -303,7 +311,7 @@ impl App {
         &self,
         entry: &Entry,
     ) -> Option<StaticImageOverlayRequest> {
-        if !self.terminal_image_overlay_available() {
+        if !self.preview.visible || !self.terminal_image_overlay_available() {
             return None;
         }
         static_image_detail_label(entry)?;

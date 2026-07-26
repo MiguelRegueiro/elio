@@ -51,6 +51,7 @@ impl Default for KeyBindings {
             history_forward: KeyList(vec![KeySpec::alt_named(NamedKey::Right)]),
             sort: KeyList::one('s'),
             toggle_view: KeyList::one('v'),
+            toggle_preview: KeyList::one('V'),
             toggle_hidden: KeyList::one('.'),
             nav_left: KeyList(vec![KeySpec::char('h'), KeySpec::named(NamedKey::Left)]),
             nav_down: KeyList(vec![KeySpec::char('j'), KeySpec::named(NamedKey::Down)]),

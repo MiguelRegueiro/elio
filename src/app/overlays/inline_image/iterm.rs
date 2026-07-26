@@ -109,9 +109,10 @@ pub(super) fn expand_raster_erase_area(
         .preview_body_area
         .or(frame_state.preview_content_area)
         .unwrap_or(area);
-    let Some(bounds) = frame_state.preview_panel.or(Some(safe_bounds)) else {
-        return area;
-    };
+    // Only erase inside the preview body/content, never into the pane border.
+    // ratatui may skip unchanged border cells on the following draw, so erasing
+    // the bottom border here can leave it blank in raster terminals like WezTerm.
+    let bounds = safe_bounds;
     let clamped = intersect_rect(area, safe_bounds).unwrap_or(area);
     let right = clamped.x.saturating_add(clamped.width);
     let bottom = clamped.y.saturating_add(clamped.height);
@@ -184,6 +185,41 @@ mod tests {
                 y: 7,
                 width: 21,
                 height: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn expand_raster_erase_area_does_not_grow_into_preview_border() {
+        let frame_state = FrameState {
+            preview_panel: Some(Rect {
+                x: 10,
+                y: 5,
+                width: 40,
+                height: 20,
+            }),
+            preview_body_area: Some(Rect {
+                x: 12,
+                y: 7,
+                width: 30,
+                height: 10,
+            }),
+            ..FrameState::default()
+        };
+        let area = Rect {
+            x: 12,
+            y: 14,
+            width: 20,
+            height: 3,
+        };
+
+        assert_eq!(
+            expand_raster_erase_area(&frame_state, area, 1, 2),
+            Rect {
+                x: 12,
+                y: 14,
+                width: 21,
+                height: 3,
             }
         );
     }

@@ -11,7 +11,7 @@ mod local_filter;
 mod open_rules;
 mod open_with;
 mod overlays;
-use crate::preview;
+use crate::{config, preview};
 mod search;
 mod selection;
 mod state;
@@ -134,7 +134,57 @@ impl App {
         self.preview.state.metrics.snapshot()
     }
 
+    pub(crate) fn preview_visible(&self) -> bool {
+        self.preview.visible
+    }
+
+    pub(in crate::app) fn toggle_preview_pane(&mut self) {
+        if preview_pane_disabled_by_layout(config::layout()) {
+            self.preview.visible = false;
+            self.status = "Preview pane disabled in config".to_string();
+            return;
+        }
+
+        self.preview.visible = !self.preview.visible;
+        if self.preview.visible {
+            self.refresh_preview();
+            self.status = "Preview shown".to_string();
+        } else {
+            self.status = "Preview hidden".to_string();
+        }
+    }
+
     pub fn report_runtime_error(&mut self, context: &str, error: &anyhow::Error) {
         self.status = format!("{context}: {error}");
+    }
+}
+
+fn preview_pane_disabled_by_layout(layout: config::LayoutConfig) -> bool {
+    layout.panes.is_some_and(|panes| panes.preview == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_pane_disabled_by_layout_when_custom_preview_weight_is_zero() {
+        assert!(preview_pane_disabled_by_layout(config::LayoutConfig {
+            panes: Some(config::PaneWeights {
+                places: 1,
+                files: 99,
+                preview: 0,
+            }),
+        }));
+        assert!(!preview_pane_disabled_by_layout(config::LayoutConfig {
+            panes: Some(config::PaneWeights {
+                places: 1,
+                files: 98,
+                preview: 1,
+            }),
+        }));
+        assert!(!preview_pane_disabled_by_layout(config::LayoutConfig {
+            panes: None
+        }));
     }
 }
