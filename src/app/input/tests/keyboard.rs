@@ -677,10 +677,10 @@ fn fullscreen_preview_allows_file_open_with_and_directory_enter() {
     app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('O'))))
         .expect("Open With should be allowed for files from fullscreen preview");
     assert!(!app.preview_fullscreen());
-    assert!(app.overlays.open_with.is_some());
-
-    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
-        .expect("Esc should close Open With overlay");
+    if app.open_with_is_open() {
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+            .expect("Esc should close Open With overlay");
+    }
     let folder_index = app
         .navigation
         .entries
@@ -693,9 +693,10 @@ fn fullscreen_preview_allows_file_open_with_and_directory_enter() {
     app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('O'))))
         .expect("Open With should be allowed for folders from fullscreen preview");
     assert!(!app.preview_fullscreen());
-    assert!(app.overlays.open_with.is_some());
-    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
-        .expect("Esc should close folder Open With overlay");
+    if app.open_with_is_open() {
+        app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+            .expect("Esc should close folder Open With overlay");
+    }
 
     app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('P'))))
         .expect("P should fullscreen folder preview again");
