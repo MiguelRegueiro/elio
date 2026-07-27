@@ -67,16 +67,10 @@ pub(super) fn render_help(
         keys.action(&kb.quit_without_cd, quit_without_cd_action),
     ]);
     let preview_entries = entries([
-        keys.preview_action(
-            &kb.scroll_preview_up,
-            &kb.scroll_preview_down,
-            "step page or scroll",
-        ),
-        keys.preview_action(
-            &kb.scroll_preview_left,
-            &kb.scroll_preview_right,
-            "scroll left / right",
-        ),
+        keys.action(&kb.scroll_preview_up, "scroll up"),
+        keys.action(&kb.scroll_preview_down, "scroll down"),
+        keys.action(&kb.scroll_preview_left, "scroll left"),
+        keys.action(&kb.scroll_preview_right, "scroll right"),
         keys.action(&kb.toggle_preview, "toggle preview pane"),
         keys.action(&kb.fullscreen_preview, "fullscreen preview"),
     ]);
@@ -107,20 +101,20 @@ pub(super) fn render_help(
             entries: preview_entries,
         },
         HelpSection {
-            title: "Selection & Clipboard",
-            entries: clipboard_entries,
+            title: "View",
+            entries: view_entries,
         },
         HelpSection {
             title: "Search",
             entries: search_entries,
         },
         HelpSection {
-            title: "File Actions",
-            entries: files_entries,
+            title: "Selection & Clipboard",
+            entries: clipboard_entries,
         },
         HelpSection {
-            title: "View",
-            entries: view_entries,
+            title: "File Actions",
+            entries: files_entries,
         },
     ];
 
@@ -129,7 +123,7 @@ pub(super) fn render_help(
     } else {
         area.width.saturating_sub(4).clamp(44, 90)
     };
-    let popup_height = area.height.saturating_sub(2).clamp(9, 38);
+    let popup_height = area.height.saturating_sub(2).clamp(9, 37);
     let popup = helpers::centered_rect(area, popup_width, popup_height);
     state.help_panel = Some(popup);
     frame.render_widget(Clear, popup);
@@ -341,22 +335,12 @@ impl<'a> HelpKeys<'a> {
         self.entry(self.pair(first, second), action)
     }
 
-    fn preview_action(&self, low: &KeyList, high: &KeyList, action: &'static str) -> HelpEntry {
-        self.entry(self.preview_pair(low, high), action)
-    }
-
     fn key(&self, keys: &KeyList) -> String {
         self.effective_keys(keys).to_string()
     }
 
     fn pair(&self, first: &KeyList, second: &KeyList) -> String {
         format_key_pair(&self.effective_keys(first), &self.effective_keys(second))
-    }
-
-    fn preview_pair(&self, low: &KeyList, high: &KeyList) -> String {
-        let low = self.effective_keys(low);
-        let high = self.effective_keys(high);
-        format_key_pair(&low, &high)
     }
 
     fn effective_keys(&self, keys: &KeyList) -> KeyList {
@@ -708,7 +692,7 @@ choose = "q"
     }
 
     #[test]
-    fn preview_scroll_help_drops_empty_sides() {
+    fn preview_scroll_help_drops_chooser_shadowed_keys() {
         let kb = KeyBindings::from_toml_str(
             r#"[keys]
 choose = "K"
@@ -716,34 +700,18 @@ choose = "K"
         );
         let keys = HelpKeys::new(&kb, HelpMode::Chooser);
 
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
-            "[ / J/]"
-        );
+        assert_eq!(keys.key(&kb.scroll_preview_up), "Shift+↑");
+        assert_eq!(keys.key(&kb.scroll_preview_down), "J/Shift+↓");
 
         let kb = KeyBindings::from_toml_str(
             r#"[keys]
-choose = ["K", "["]
+choose = ["K", "shift+up"]
 "#,
         );
         let keys = HelpKeys::new(&kb, HelpMode::Chooser);
 
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
-            "J/]"
-        );
-
-        let kb = KeyBindings::from_toml_str(
-            r#"[keys]
-choose = ["K", "[", "J", "]"]
-"#,
-        );
-        let keys = HelpKeys::new(&kb, HelpMode::Chooser);
-
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
-            ""
-        );
+        assert_eq!(keys.key(&kb.scroll_preview_up), "");
+        assert_eq!(keys.key(&kb.scroll_preview_down), "J/Shift+↓");
     }
 
     #[test]
@@ -751,14 +719,10 @@ choose = ["K", "[", "J", "]"]
         let kb = KeyBindings::default();
         let keys = HelpKeys::new(&kb, HelpMode::Normal);
 
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_up, &kb.scroll_preview_down),
-            "K/[ / J/]"
-        );
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_left, &kb.scroll_preview_right),
-            "H / L"
-        );
+        assert_eq!(keys.key(&kb.scroll_preview_up), "K/Shift+↑");
+        assert_eq!(keys.key(&kb.scroll_preview_down), "J/Shift+↓");
+        assert_eq!(keys.key(&kb.scroll_preview_left), "H/Shift+←");
+        assert_eq!(keys.key(&kb.scroll_preview_right), "L/Shift+→");
 
         let kb = KeyBindings::from_toml_str(
             r#"[keys]
@@ -768,9 +732,7 @@ scroll_preview_right = "B"
         );
         let keys = HelpKeys::new(&kb, HelpMode::Normal);
 
-        assert_eq!(
-            keys.preview_pair(&kb.scroll_preview_left, &kb.scroll_preview_right),
-            "A / B"
-        );
+        assert_eq!(keys.key(&kb.scroll_preview_left), "A");
+        assert_eq!(keys.key(&kb.scroll_preview_right), "B");
     }
 }

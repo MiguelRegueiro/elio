@@ -2364,8 +2364,8 @@ fn confirm_open_with_launch_failure_sets_status() {
 }
 
 #[test]
-fn bracket_keys_scroll_text_preview_vertically() {
-    let root = temp_path("bracket-scroll-text-preview");
+fn shift_arrow_keys_scroll_text_preview_vertically() {
+    let root = temp_path("shift-arrow-scroll-text-preview");
     fs::create_dir_all(&root).expect("failed to create temp root");
     let long_file = root.join("long.txt");
     let contents = (0..120)
@@ -2398,19 +2398,22 @@ fn bracket_keys_scroll_text_preview_vertically() {
 
     assert_eq!(app.preview.state.scroll, 0, "preview should start at top");
 
-    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char(']'))))
-        .expect("] should be handled");
+    app.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        KeyModifiers::SHIFT,
+    )))
+    .expect("Shift+Down should be handled");
     let after_down = app.preview.state.scroll;
     assert!(
         after_down > 0,
-        "] should scroll the text preview down, got {after_down}"
+        "Shift+Down should scroll the text preview down, got {after_down}"
     );
 
-    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('['))))
-        .expect("[ should be handled");
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)))
+        .expect("Shift+Up should be handled");
     assert!(
         app.preview.state.scroll < after_down,
-        "[ should scroll the text preview back up, got {} (was {after_down})",
+        "Shift+Up should scroll the text preview back up, got {} (was {after_down})",
         app.preview.state.scroll
     );
 

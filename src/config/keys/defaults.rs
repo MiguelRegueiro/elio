@@ -58,10 +58,22 @@ impl Default for KeyBindings {
             nav_down: KeyList(vec![KeySpec::char('j'), KeySpec::named(NamedKey::Down)]),
             nav_up: KeyList(vec![KeySpec::char('k'), KeySpec::named(NamedKey::Up)]),
             nav_right: KeyList(vec![KeySpec::char('l'), KeySpec::named(NamedKey::Right)]),
-            scroll_preview_left: KeyList::one('H'),
-            scroll_preview_right: KeyList::one('L'),
-            scroll_preview_up: KeyList(vec![KeySpec::char('K'), KeySpec::char('[')]),
-            scroll_preview_down: KeyList(vec![KeySpec::char('J'), KeySpec::char(']')]),
+            scroll_preview_left: KeyList(vec![
+                KeySpec::char('H'),
+                KeySpec::shift_named(NamedKey::Left),
+            ]),
+            scroll_preview_right: KeyList(vec![
+                KeySpec::char('L'),
+                KeySpec::shift_named(NamedKey::Right),
+            ]),
+            scroll_preview_up: KeyList(vec![
+                KeySpec::char('K'),
+                KeySpec::shift_named(NamedKey::Up),
+            ]),
+            scroll_preview_down: KeyList(vec![
+                KeySpec::char('J'),
+                KeySpec::shift_named(NamedKey::Down),
+            ]),
         }
     }
 }

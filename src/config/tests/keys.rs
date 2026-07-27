@@ -208,7 +208,7 @@ fn keys_accept_modifier_bindings() {
 open = "ctrl+o"
 open_with = "alt+o"
 open_or_enter = ["enter", "ctrl+enter"]
-nav_right = "shift+right"
+nav_right = "shift+home"
 nav_left = "ctrl+alt+up"
 "#,
     )
@@ -217,7 +217,7 @@ nav_left = "ctrl+alt+up"
     assert_eq!(config.keys.open.to_string(), "Ctrl+O");
     assert_eq!(config.keys.open_with.to_string(), "Alt+O");
     assert_eq!(config.keys.open_or_enter.to_string(), "Enter/Ctrl+Enter");
-    assert_eq!(config.keys.nav_right.to_string(), "Shift+→");
+    assert_eq!(config.keys.nav_right.to_string(), "Shift+Home");
     assert_eq!(config.keys.nav_left.to_string(), "Ctrl+Alt+↑");
     assert_eq!(
         config
@@ -240,7 +240,7 @@ nav_left = "ctrl+alt+up"
     assert_eq!(
         config
             .keys
-            .action_for_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)),
+            .action_for_key(KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT)),
         Some(Action::NavRight)
     );
     assert_eq!(
@@ -391,6 +391,7 @@ fn keys_match_modifiers_exactly() {
         r#"
 [keys]
 nav_right = "right"
+scroll_preview_right = []
 open = "shift+right"
 "#,
     )
@@ -431,6 +432,7 @@ fn modified_and_plain_bindings_do_not_collide() {
 [keys]
 extract_archive = []
 nav_right = []
+scroll_preview_right = []
 open = "e"
 search_folders = "ctrl+e"
 open_or_enter = "right"
@@ -1464,20 +1466,27 @@ shell = "S"
 }
 
 #[test]
-fn preview_scroll_defaults_map_to_shift_h_j_k_l_and_brackets() {
+fn preview_scroll_defaults_map_to_shift_h_j_k_l_and_shift_arrows() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     let key_bindings = KeyBindings::default();
-    assert_eq!(key_bindings.scroll_preview_up.to_string(), "K/[");
-    assert_eq!(key_bindings.scroll_preview_down.to_string(), "J/]");
-    assert_eq!(key_bindings.scroll_preview_left, 'H');
-    assert_eq!(key_bindings.scroll_preview_right, 'L');
+    assert_eq!(key_bindings.scroll_preview_up.to_string(), "K/Shift+↑");
+    assert_eq!(key_bindings.scroll_preview_down.to_string(), "J/Shift+↓");
+    assert_eq!(key_bindings.scroll_preview_left.to_string(), "H/Shift+←");
+    assert_eq!(key_bindings.scroll_preview_right.to_string(), "L/Shift+→");
     assert_eq!(key_bindings.action_for('K'), Some(Action::ScrollPreviewUp));
-    assert_eq!(key_bindings.action_for('['), Some(Action::ScrollPreviewUp));
+    assert_eq!(key_bindings.action_for('['), None);
+    assert_eq!(
+        key_bindings.action_for_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)),
+        Some(Action::ScrollPreviewUp)
+    );
     assert_eq!(
         key_bindings.action_for('J'),
         Some(Action::ScrollPreviewDown)
     );
+    assert_eq!(key_bindings.action_for(']'), None);
     assert_eq!(
-        key_bindings.action_for(']'),
+        key_bindings.action_for_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT)),
         Some(Action::ScrollPreviewDown)
     );
     assert_eq!(
@@ -1485,7 +1494,15 @@ fn preview_scroll_defaults_map_to_shift_h_j_k_l_and_brackets() {
         Some(Action::ScrollPreviewLeft)
     );
     assert_eq!(
+        key_bindings.action_for_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT)),
+        Some(Action::ScrollPreviewLeft)
+    );
+    assert_eq!(
         key_bindings.action_for('L'),
+        Some(Action::ScrollPreviewRight)
+    );
+    assert_eq!(
+        key_bindings.action_for_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT)),
         Some(Action::ScrollPreviewRight)
     );
 }
@@ -1510,6 +1527,23 @@ scroll_preview_up = "U"
 }
 
 #[test]
+fn brackets_remain_valid_configurable_preview_scroll_keys() {
+    let config = Config::from_str(
+        r#"
+[keys]
+scroll_preview_up = "["
+scroll_preview_down = "]"
+"#,
+    )
+    .expect("config should parse");
+
+    assert_eq!(config.keys.action_for('['), Some(Action::ScrollPreviewUp));
+    assert_eq!(config.keys.action_for(']'), Some(Action::ScrollPreviewDown));
+    assert_eq!(config.keys.action_for('K'), None);
+    assert_eq!(config.keys.action_for('J'), None);
+}
+
+#[test]
 fn scroll_preview_keys_reject_collision_with_other_default() {
     let config = Config::from_str(
         r#"
@@ -1520,7 +1554,7 @@ scroll_preview_up = "y"
     .expect("config should parse");
     assert_eq!(
         config.keys.scroll_preview_up.to_string(),
-        "K/[",
+        "K/Shift+↑",
         "user override colliding with default 'y' (yank) must fall back to default 'K'"
     );
     assert_eq!(config.keys.yank, 'y');
@@ -1546,7 +1580,7 @@ scroll_preview_down = "U"
 "#,
     )
     .expect("config should parse");
-    assert_eq!(config.keys.scroll_preview_up.to_string(), "K/[");
+    assert_eq!(config.keys.scroll_preview_up.to_string(), "K/Shift+↑");
     assert_eq!(config.keys.scroll_preview_down, 'U');
     assert_eq!(config.keys.action_for('U'), Some(Action::ScrollPreviewDown));
     assert_eq!(config.keys.action_for('K'), Some(Action::ScrollPreviewUp));

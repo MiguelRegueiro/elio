@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a configurable `toggle_preview` (`V`) shortcut to show or hide the preview pane. ([#251])
 - Added a configurable `fullscreen_preview` (`P`) shortcut to temporarily expand the preview pane.
 
+### Changed
+
+- Changed preview scroll defaults from `[` / `]` to `Shift+arrows`; `H/J/K/L` remain unchanged.
+
 ### Fixed
 
 - Fixed license icons in archive previews.

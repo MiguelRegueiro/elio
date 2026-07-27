@@ -1549,12 +1549,12 @@ fn help_overlay_keeps_controls_readable_and_drops_auto_reload_row() {
         "expected help overlay to include the Preview section header, got: {rendered:?}"
     );
     assert!(
-        rendered.contains("K/[ / J/]"),
+        rendered.contains("K/Shift+↑") && rendered.contains("J/Shift+↓"),
         "expected help overlay to list the vertical preview scroll keys, got: {rendered:?}"
     );
     assert!(
-        rendered.contains("H / L") && !rendered.contains("Shift+H / Shift+L"),
-        "expected help overlay to use standard uppercase notation for horizontal preview scroll keys, got: {rendered:?}"
+        rendered.contains("H/Shift+←") && rendered.contains("L/Shift+→"),
+        "expected help overlay to list uppercase and Shift+arrow horizontal preview scroll keys, got: {rendered:?}"
     );
     assert!(
         rendered.contains("symlink relative"),
@@ -1628,7 +1628,7 @@ fn compact_help_overlay_scrolls_instead_of_truncating_small_terminals() {
     let rendered = buffer_text(terminal.backend().buffer());
 
     assert!(
-        rendered.contains("View") && rendered.contains("toggle grid / list"),
+        rendered.contains("File Actions") && rendered.contains("open with"),
         "compact help should keep late sections reachable, got: {rendered:?}"
     );
     assert!(
