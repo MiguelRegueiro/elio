@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed license icons in archive previews.
 - Fixed image previews bleeding through archive creation popups in transparent themes.
 - Fixed image previews disappearing after returning from actions that suspend and restore the TUI.
+- Fixed pasted text being handled as normal keystrokes.
 
 ## [1.11.2] - 2026-07-22
 
