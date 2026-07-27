@@ -6,8 +6,8 @@ use anyhow::Result;
 use crossterm::{
     cursor::SetCursorStyle,
     event::{
-        self, DisableFocusChange, EnableFocusChange, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -210,6 +210,7 @@ fn try_init_terminal() -> Result<(AppTerminal, Drainer, KittyDndRuntime)> {
         terminal_output,
         EnterAlternateScreen,
         event::EnableMouseCapture,
+        EnableBracketedPaste,
         EnableFocusChange
     )?;
 
@@ -297,6 +298,7 @@ pub(super) fn suspend_terminal(
     execute!(
         terminal.backend_mut(),
         event::DisableMouseCapture,
+        DisableBracketedPaste,
         DisableFocusChange,
         SetCursorStyle::DefaultUserShape
     )?;
@@ -332,6 +334,7 @@ pub(super) fn resume_terminal(
             backend,
             EnterAlternateScreen,
             event::EnableMouseCapture,
+            EnableBracketedPaste,
             EnableFocusChange,
         )?;
         write!(backend, "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h")?;
@@ -370,6 +373,7 @@ pub(super) fn restore_terminal(
     execute!(
         terminal.backend_mut(),
         event::DisableMouseCapture,
+        DisableBracketedPaste,
         DisableFocusChange,
         SetCursorStyle::DefaultUserShape,
         LeaveAlternateScreen
@@ -393,6 +397,7 @@ fn cleanup_terminal_state() -> io::Result<()> {
         let _ = execute!(
             terminal_output,
             event::DisableMouseCapture,
+            DisableBracketedPaste,
             DisableFocusChange,
             SetCursorStyle::DefaultUserShape,
             LeaveAlternateScreen,
