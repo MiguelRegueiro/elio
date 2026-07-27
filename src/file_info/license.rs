@@ -86,7 +86,7 @@ pub(super) fn sniff_license_file_type(
     ext: &str,
     base_facts: FileFacts,
 ) -> Option<FileFacts> {
-    let canonical_candidate = is_canonical_license_candidate_name(name);
+    let canonical_candidate = is_canonical_license_candidate_key(name);
     let can_sniff_content = can_sniff_license_content(base_facts);
     let can_sniff_markers = can_sniff_license_markers(ext, base_facts);
 
@@ -118,7 +118,7 @@ pub(super) fn sniff_browser_license_file_type(
     ext: &str,
     base_facts: FileFacts,
 ) -> Option<FileFacts> {
-    let canonical_candidate = is_canonical_license_candidate_name(name);
+    let canonical_candidate = is_canonical_license_candidate_key(name);
     let can_sniff_content = can_sniff_license_content(base_facts);
     let can_sniff_markers = can_sniff_license_markers(ext, base_facts);
 
@@ -159,7 +159,12 @@ fn can_sniff_license_content(base_facts: FileFacts) -> bool {
     )
 }
 
-fn is_canonical_license_candidate_name(name: &str) -> bool {
+pub(crate) fn is_canonical_license_file_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    is_canonical_license_candidate_key(&name)
+}
+
+fn is_canonical_license_candidate_key(name: &str) -> bool {
     const EXACT_CANDIDATES: &[&str] = &["license", "licence", "copying", "copyright", "unlicense"];
     const PREFIX_CANDIDATES: &[&str] = &["license", "licence", "copying", "copyright", "unlicense"];
 

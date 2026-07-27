@@ -1,4 +1,4 @@
-use crate::core::{Entry, EntryKind};
+use crate::core::{Entry, EntryKind, FileClass};
 use ratatui::style::Color;
 use std::path::Path;
 
@@ -128,6 +128,18 @@ pub(crate) fn code_preview_palette() -> CodePreviewPalette {
 
 pub(crate) fn resolve_path(path: &Path, kind: EntryKind) -> PathAppearance<'static> {
     let appearance = crate::ui::theme::resolve_path(path, kind);
+    PathAppearance {
+        icon: appearance.icon,
+        color: appearance.color,
+    }
+}
+
+pub(crate) fn resolve_path_with_class(
+    path: &Path,
+    kind: EntryKind,
+    class: FileClass,
+) -> PathAppearance<'static> {
+    let appearance = crate::ui::theme::resolve_path_with_class(path, kind, class);
     PathAppearance {
         icon: appearance.icon,
         color: appearance.color,

@@ -1,4 +1,6 @@
 use super::*;
+use crate::core::{EntryKind, FileClass};
+use std::path::Path;
 
 #[test]
 fn torrent_preview_shows_single_file_metadata_and_trackers() {
@@ -361,6 +363,47 @@ fn zip_preview_renders_archive_details_and_tree() {
     assert!(line_texts.iter().any(|text| text.contains("src/")));
     assert!(line_texts.iter().any(|text| text.contains("readme.txt")));
     assert!(line_texts.iter().any(|text| text.contains("main.rs")));
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn zip_preview_uses_license_icon_for_canonical_license_entries() {
+    let root = temp_path("zip-license-icons");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let path = root.join("licenses.zip");
+    write_zip_entries(
+        &path,
+        &[
+            ("LICENSE", "MIT License\n"),
+            ("LICENSE-MIT", "MIT License\n"),
+            ("COPYING.LESSER", "GNU Lesser General Public License\n"),
+            ("UNLICENSE", "The Unlicense\n"),
+            ("license/readme.txt", "not a license directory\n"),
+        ],
+    );
+
+    let preview = build_preview(&file_entry(path));
+    let license_icon =
+        theme::resolve_path_with_class(Path::new("LICENSE"), EntryKind::File, FileClass::License)
+            .icon;
+    let directory_icon = theme::resolve_path(Path::new("license"), EntryKind::Directory).icon;
+
+    for name in ["LICENSE", "LICENSE-MIT", "COPYING.LESSER", "UNLICENSE"] {
+        let line = preview
+            .lines
+            .iter()
+            .find(|line| line_text(line).contains(name))
+            .unwrap_or_else(|| panic!("archive preview should show {name}"));
+        assert_eq!(line.spans[1].content.trim(), license_icon);
+    }
+
+    let directory_line = preview
+        .lines
+        .iter()
+        .find(|line| line_text(line).contains("license/"))
+        .expect("archive preview should show the license directory");
+    assert_eq!(directory_line.spans[1].content.trim(), directory_icon);
 
     fs::remove_dir_all(root).expect("failed to remove temp root");
 }

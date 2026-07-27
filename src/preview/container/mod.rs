@@ -3,7 +3,10 @@ mod iso;
 mod torrent;
 
 use super::{appearance as theme, *};
-use crate::core::EntryKind;
+use crate::{
+    core::{EntryKind, FileClass},
+    file_info,
+};
 use ratatui::{
     style::Style,
     text::{Line, Span},
@@ -192,14 +195,22 @@ fn render_archive_tree_line(
     palette: theme::Palette,
 ) -> Line<'static> {
     let connector = if is_last { "└── " } else { "├── " };
-    let appearance = theme::resolve_path(
-        Path::new(&node.path),
-        if node.is_dir {
-            EntryKind::Directory
-        } else {
-            EntryKind::File
-        },
-    );
+    let path = Path::new(&node.path);
+    let kind = if node.is_dir {
+        EntryKind::Directory
+    } else {
+        EntryKind::File
+    };
+    let license_entry = !node.is_dir
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(file_info::is_canonical_license_file_name);
+    let appearance = if license_entry {
+        theme::resolve_path_with_class(path, kind, FileClass::License)
+    } else {
+        theme::resolve_path(path, kind)
+    };
     let mut display_name = name.to_string();
     if node.is_dir {
         display_name.push('/');
