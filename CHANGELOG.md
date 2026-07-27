@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed license icons in archive previews.
+- Fixed image previews bleeding through archive creation popups in transparent themes.
 
 ## [1.11.2] - 2026-07-22
 
