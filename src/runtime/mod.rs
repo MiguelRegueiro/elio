@@ -446,6 +446,7 @@ fn run_app(
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
                         run_blocking_in_terminal(&program, &args);
                         resume_terminal(terminal, drainer, kitty_dnd)?;
+                        app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
                         None
                     }
@@ -456,6 +457,7 @@ fn run_app(
                             run_blocking_in_terminal(&program, &args);
                         }
                         resume_terminal(terminal, drainer, kitty_dnd)?;
+                        app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
                         None
                     }
@@ -469,6 +471,7 @@ fn run_app(
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
                         let result = run_blocking_in_terminal_result(&program, &args);
                         resume_terminal(terminal, drainer, kitty_dnd)?;
+                        app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
                         if let Err(error) = app.finish_editor_bulk_rename(session, result) {
                             app.report_runtime_error("Editor rename failed", &error);
@@ -480,6 +483,7 @@ fn run_app(
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
                         let shell_result = shell::run_in_current_terminal(&cwd);
                         resume_terminal(terminal, drainer, kitty_dnd)?;
+                        app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
                         match shell_result {
                             Ok(()) => refresh_after_shell(&mut app, &cwd),
@@ -496,6 +500,7 @@ fn run_app(
                             suspend_terminal(terminal, drainer, false, kitty_dnd)?;
                             let result = zoxide::run_query_in_terminal(&cwd);
                             resume_terminal(terminal, drainer, kitty_dnd)?;
+                            app.invalidate_terminal_image_overlay_after_terminal_task();
                             pause_runtime_input(&input_reader, false);
                             Some(result)
                         }

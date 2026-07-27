@@ -734,6 +734,40 @@ fn leaving_fullscreen_preview_queues_image_geometry_clear() {
 }
 
 #[test]
+fn returning_from_terminal_task_replaces_logically_displayed_image() {
+    let (mut app, root) = build_displayed_iterm_inline_image_app("terminal-task-image-restore");
+    assert!(app.static_image_overlay_displayed());
+    assert!(app.displayed_static_image_matches_active());
+    assert!(
+        app.present_preview_overlay()
+            .expect("steady-state image presentation should not fail")
+            .is_empty(),
+        "a matching logical image would otherwise skip re-placement"
+    );
+
+    app.invalidate_terminal_image_overlay_after_terminal_task();
+    assert!(
+        app.take_pending_resize_clear(),
+        "returning from a terminal task should force a full image repaint"
+    );
+    assert!(
+        !app.static_image_overlay_displayed(),
+        "terminal-task invalidation should drop stale logical image state"
+    );
+
+    let restored = String::from_utf8(
+        app.present_preview_overlay()
+            .expect("re-presenting after terminal task should not fail"),
+    )
+    .expect("restored iTerm image output should be valid utf8");
+    assert!(restored.contains("\x1b]1337;File=inline=1;"));
+    assert!(app.static_image_overlay_displayed());
+    assert!(app.displayed_static_image_matches_active());
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn resize_settle_holds_image_placement_until_window_expires() {
     let (mut app, root) = build_displayed_iterm_inline_image_app("resize-settle-hold");
 

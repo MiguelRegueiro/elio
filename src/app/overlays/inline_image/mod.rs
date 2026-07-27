@@ -258,6 +258,23 @@ impl App {
         }
     }
 
+    pub(crate) fn invalidate_terminal_image_overlay_after_terminal_task(&mut self) {
+        if self.preview.terminal_images.protocol == ImageProtocol::None
+            || (!self.static_image_overlay_displayed() && !self.pdf_overlay_displayed())
+        {
+            return;
+        }
+
+        // zoxide, Shell Here, Open With, and editor-based actions temporarily
+        // hand the real terminal to another program. That program may leave the
+        // alternate screen, clear it, or simply overpaint the image cells. The
+        // terminal-side image is no longer trustworthy even though elio's active
+        // preview request still matches the last displayed overlay, so force the
+        // next frame through the same full-repaint path used after image geometry
+        // changes and let normal presentation re-place the image.
+        self.preview.terminal_images.pending_resize_clear = true;
+    }
+
     pub(crate) fn take_pending_resize_clear(&mut self) -> bool {
         if !self.preview.terminal_images.pending_resize_clear {
             return false;
