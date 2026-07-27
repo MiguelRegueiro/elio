@@ -629,6 +629,9 @@ impl App {
         if let Some(r) = self.input.frame_state.archive_password_panel {
             rects.push(r);
         }
+        if let Some(r) = self.input.frame_state.archive_create_panel {
+            rects.push(r);
+        }
         if let Some(r) = self.input.frame_state.create_panel {
             rects.push(r);
         }
@@ -657,6 +660,7 @@ impl App {
         self.overlays.trash.is_some()
             || self.overlays.restore.is_some()
             || self.overlays.archive_password.is_some()
+            || self.overlays.archive_create.is_some()
             || self.overlays.create.is_some()
             || self.overlays.rename.is_some()
             || self.overlays.bulk_rename.is_some()

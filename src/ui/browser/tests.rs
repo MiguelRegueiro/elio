@@ -1033,6 +1033,10 @@ fn archive_create_overlay_adapts_contents_to_short_terminals() {
             shows_contents,
             "contents visibility should track whether a complete row fits at height {height}"
         );
+        assert!(
+            app.collect_popup_rects().contains(&panel),
+            "archive creation popup should mask terminal image previews"
+        );
         if !shows_contents {
             assert_eq!(panel.height, 6, "compact popup should not leave dead rows");
         }
