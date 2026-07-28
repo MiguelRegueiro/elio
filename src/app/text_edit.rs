@@ -10,6 +10,34 @@ pub(super) fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
+pub(super) fn insert_text_at_cursor(text: &mut String, cursor: &mut usize, inserted: &str) {
+    let byte = char_to_byte(text, *cursor);
+    text.insert_str(byte, inserted);
+    *cursor += inserted.chars().count();
+}
+
+pub(super) fn single_line_paste_text(text: &str) -> String {
+    normalize_paste_newlines(text)
+        .chars()
+        .filter_map(|ch| match ch {
+            '\n' => Some(' '),
+            ch if ch.is_control() && ch != '\t' => None,
+            ch => Some(ch),
+        })
+        .collect()
+}
+
+pub(super) fn multiline_paste_text(text: &str) -> String {
+    normalize_paste_newlines(text)
+        .chars()
+        .filter(|ch| *ch == '\n' || !ch.is_control() || *ch == '\t')
+        .collect()
+}
+
+fn normalize_paste_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Move cursor left to the start of the previous word (shell-style).
 pub(super) fn previous_word_start(text: &str, cursor: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();

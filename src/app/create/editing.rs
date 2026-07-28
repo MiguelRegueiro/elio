@@ -5,7 +5,7 @@ use super::super::text_edit::{
 };
 
 impl App {
-    pub(in crate::app::create) fn create_insert_newline(&mut self) {
+    pub(in crate::app) fn create_insert_newline(&mut self) {
         let Some(c) = &mut self.overlays.create else {
             return;
         };

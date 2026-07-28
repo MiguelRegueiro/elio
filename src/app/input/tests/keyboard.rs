@@ -84,6 +84,176 @@ fn fake_default_open_with_app(
     }
 }
 
+#[test]
+fn pasted_text_is_ignored_in_browser_mode() {
+    let root = temp_path("paste-browser-ignored");
+    fs::write(root.join("alpha.txt"), "").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    let selected_before = app.selected_entry().map(|entry| entry.path.clone());
+
+    app.handle_event(Event::Paste("jjjj".to_string()))
+        .expect("paste event should be accepted");
+
+    assert_eq!(
+        app.selected_entry().map(|entry| entry.path.clone()),
+        selected_before
+    );
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_fuzzy_search_query() {
+    let root = temp_path("paste-search");
+    fs::write(root.join("alpha.txt"), "").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_fuzzy_finder(SearchScope::Files)
+        .expect("failed to open fuzzy finder");
+
+    app.handle_event(Event::Paste("beta".to_string()))
+        .expect("paste event should update search");
+
+    assert_eq!(app.search_query(), "beta");
+    assert_eq!(app.search_query_cursor(), 4);
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_local_filter() {
+    let root = temp_path("paste-local-filter");
+    fs::write(root.join("alpha.txt"), "").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_local_filter();
+
+    app.handle_event(Event::Paste("beta".to_string()))
+        .expect("paste event should update filter");
+
+    assert_eq!(app.local_filter_query(), "beta");
+    assert_eq!(
+        app.selected_entry().map(|entry| entry.name.as_str()),
+        Some("beta.txt")
+    );
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_does_not_reach_local_filter_under_non_text_overlay() {
+    let root = temp_path("paste-local-filter-shadowed");
+    fs::write(root.join("alpha.txt"), "").expect("failed to write alpha");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_local_filter();
+    app.open_copy_overlay();
+
+    app.handle_event(Event::Paste("hidden".to_string()))
+        .expect("paste event should be ignored by non-text overlay");
+
+    assert!(app.copy_is_open());
+    assert_eq!(app.local_filter_query(), "");
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_create_prompt_without_submitting() {
+    let root = temp_path("paste-create");
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_create_prompt();
+
+    app.handle_event(Event::Paste("one.txt\ntwo.txt".to_string()))
+        .expect("paste event should update create prompt");
+
+    assert!(app.create_is_open());
+    assert_eq!(app.create_line_count(), 2);
+    assert_eq!(app.create_line(0), "one.txt");
+    assert_eq!(app.create_line(1), "two.txt");
+    assert_eq!(app.create_cursor_line(), 1);
+    assert_eq!(app.create_cursor_col(), 7);
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_rename_prompt_at_cursor() {
+    let root = temp_path("paste-rename");
+    fs::write(root.join("report.txt"), "draft").expect("failed to write report");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_rename_prompt();
+
+    app.handle_event(Event::Paste("-final".to_string()))
+        .expect("paste event should update rename prompt");
+
+    assert_eq!(app.rename_input(), "report-final.txt");
+    assert_eq!(app.rename_cursor_col(), "report-final".chars().count());
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_bulk_rename_prompt_at_active_row() {
+    let root = temp_path("paste-bulk-rename");
+    fs::write(root.join("alpha.txt"), "alpha").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "beta").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.navigation.selected_paths.insert(root.join("alpha.txt"));
+    app.navigation.selected_paths.insert(root.join("beta.txt"));
+    app.open_bulk_rename_prompt();
+
+    app.handle_event(Event::Paste("renamed-".to_string()))
+        .expect("paste event should update bulk rename prompt");
+
+    assert_eq!(app.bulk_rename_new_name(0), "renamed-alpha.txt");
+    assert_eq!(app.bulk_rename_new_name(1), "beta.txt");
+    assert_eq!(app.bulk_rename_cursor_col(), "renamed-".chars().count());
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_archive_create_name_at_cursor() {
+    let root = temp_path("paste-archive-create");
+    fs::write(root.join("alpha.txt"), "alpha").expect("failed to write alpha");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_archive_create_prompt();
+
+    app.handle_event(Event::Paste("-backup".to_string()))
+        .expect("paste event should update archive create prompt");
+
+    assert_eq!(app.archive_create_input(), "alpha.txt-backup.zip");
+    assert_eq!(
+        app.archive_create_cursor_col(),
+        "alpha.txt-backup".chars().count()
+    );
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn pasted_text_updates_archive_password_and_flattens_newlines() {
+    let root = temp_path("paste-archive-password");
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_archive_password_prompt(root.join("archive.zip"), None);
+
+    app.handle_event(Event::Paste("pa\nss".to_string()))
+        .expect("paste event should update archive password prompt");
+
+    assert_eq!(app.archive_password_input(), "pa ss");
+    assert_eq!(app.archive_password_cursor_col(), "pa ss".chars().count());
+
+    cleanup_app_temp_root(app, root);
+}
+
 fn app_with_offscreen_selected_dir(label: &str) -> (PathBuf, PathBuf, App) {
     let root = temp_path(label);
     let offscreen = root.join("offscreen");
