@@ -1,4 +1,7 @@
 use super::*;
+use crate::app::text_edit::{
+    char_to_byte, insert_text_at_cursor, multiline_paste_text, single_line_paste_text,
+};
 
 const HELP_FALLBACK_SCROLL_MAX: usize = 64;
 const HELP_FALLBACK_PAGE_STEP: usize = 8;
@@ -8,13 +11,147 @@ impl App {
         let result = match event {
             Event::Key(key) => self.handle_key(key),
             Event::Mouse(mouse) => self.handle_mouse(mouse),
-            Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Paste(_) => Ok(()),
+            Event::Paste(text) => self.handle_paste(&text),
+            Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => Ok(()),
         };
 
         if let Err(error) = result {
             self.report_runtime_error("Action failed", &error);
         }
 
+        Ok(())
+    }
+
+    fn handle_paste(&mut self, text: &str) -> Result<()> {
+        if self.overlays.trash.is_some() || self.overlays.restore.is_some() {
+            return Ok(());
+        }
+
+        if self.overlays.archive_password.is_some() {
+            return self.paste_into_archive_password(text);
+        }
+
+        if self.overlays.archive_create.is_some() {
+            return self.paste_into_archive_create(text);
+        }
+
+        if self.overlays.create.is_some() {
+            return self.paste_into_create(text);
+        }
+
+        if self.overlays.rename.is_some() {
+            return self.paste_into_rename(text);
+        }
+
+        if self.overlays.bulk_rename.is_some() {
+            return self.paste_into_bulk_rename(text);
+        }
+
+        if self.overlays.editor_rename_confirm.is_some()
+            || self.overlays.goto.is_some()
+            || self.overlays.copy.is_some()
+            || self.overlays.open_with.is_some()
+        {
+            return Ok(());
+        }
+
+        if self.overlays.search.is_some() {
+            return self.paste_into_search(text);
+        }
+
+        if self.local_filter_is_editing() {
+            return self.paste_into_local_filter(text);
+        }
+
+        Ok(())
+    }
+
+    fn paste_into_archive_password(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        if let Some(overlay) = &mut self.overlays.archive_password {
+            insert_text_at_cursor(&mut overlay.input, &mut overlay.cursor_col, &text);
+            overlay.error = None;
+        }
+        Ok(())
+    }
+
+    fn paste_into_archive_create(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        if let Some(overlay) = &mut self.overlays.archive_create {
+            insert_text_at_cursor(&mut overlay.input, &mut overlay.cursor_col, &text);
+            overlay.error = None;
+        }
+        Ok(())
+    }
+
+    fn paste_into_create(&mut self, text: &str) -> Result<()> {
+        let text = multiline_paste_text(text);
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                self.create_insert_newline();
+                continue;
+            }
+            if let Some(overlay) = &mut self.overlays.create {
+                let byte = char_to_byte(&overlay.lines[overlay.cursor_line], overlay.cursor_col);
+                overlay.lines[overlay.cursor_line].insert(byte, ch);
+                overlay.cursor_col += 1;
+                overlay.preferred_col = overlay.cursor_col;
+                overlay.line_errors[overlay.cursor_line] = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn paste_into_rename(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        if let Some(overlay) = &mut self.overlays.rename {
+            insert_text_at_cursor(&mut overlay.input, &mut overlay.cursor_col, &text);
+            overlay.error = None;
+        }
+        Ok(())
+    }
+
+    fn paste_into_bulk_rename(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        if let Some(overlay) = &mut self.overlays.bulk_rename {
+            insert_text_at_cursor(
+                &mut overlay.new_names[overlay.cursor_line],
+                &mut overlay.cursor_col,
+                &text,
+            );
+            overlay.preferred_col = overlay.cursor_col;
+            overlay.line_errors[overlay.cursor_line] = None;
+        }
+        Ok(())
+    }
+
+    fn paste_into_search(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        let previous_query = self
+            .overlays
+            .search
+            .as_ref()
+            .map(|search| search.query.clone())
+            .unwrap_or_default();
+        if let Some(search) = &mut self.overlays.search {
+            insert_text_at_cursor(&mut search.query, &mut search.query_cursor, &text);
+        }
+        self.refresh_search_matches(&previous_query);
+        Ok(())
+    }
+
+    fn paste_into_local_filter(&mut self, text: &str) -> Result<()> {
+        let text = single_line_paste_text(text);
+        insert_text_at_cursor(
+            &mut self.navigation.local_filter.query,
+            &mut self.navigation.local_filter.cursor,
+            &text,
+        );
+        self.apply_local_filter_preserving_selection();
         Ok(())
     }
 
