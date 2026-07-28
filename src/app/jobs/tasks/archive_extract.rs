@@ -116,112 +116,169 @@ impl ArchiveExtractShared {
 }
 
 fn run_extract(
-    request: ArchiveExtractRequest,
+    mut request: ArchiveExtractRequest,
     result_tx: &mpsc::Sender<JobResult>,
     cancelled: &AtomicBool,
     cancel_token: &AtomicU64,
 ) {
-    let mut completed = 0usize;
-    let mut total = None;
     let mut last_progress_at: Option<Instant> = None;
     let mut stopped_early = false;
+    let mut first_password = request.password.take();
+    let mut single_status = None;
+    let mut single_error_status = None;
 
-    let result = crate::archive::plan_extract(&request.archive_path)
-        .map_err(ExtractError::from)
-        .and_then(|plan| {
-            crate::archive::extract_archive_with_password(
-                &plan,
-                request.password.as_ref(),
-                |progress| {
-                    completed = progress.completed;
-                    total = progress.total;
-                    let _ = send_extract_progress(
-                        result_tx,
-                        request.token,
-                        completed,
-                        total,
-                        &mut last_progress_at,
-                    );
-                },
-                || {
-                    let stop = cancelled.load(Ordering::Relaxed)
-                        || cancel_token.load(Ordering::Relaxed) == request.token;
-                    if stop {
-                        stopped_early = true;
-                    }
-                    stop
-                },
-            )
-        });
+    while let Some(archive_path) = request.archives.first().cloned() {
+        if cancelled.load(Ordering::Relaxed)
+            || cancel_token.load(Ordering::Relaxed) == request.token
+        {
+            stopped_early = true;
+            break;
+        }
 
-    let mut password_prompt = None;
-    let (dest_dir, status) = match result {
-        Ok(summary) if stopped_early => {
-            let noun = if summary.completed == 1 {
-                "item"
+        let password = first_password.take();
+        let result = crate::archive::plan_extract(&archive_path)
+            .map_err(ExtractError::from)
+            .and_then(|plan| {
+                crate::archive::extract_archive_with_password(
+                    &plan,
+                    password.as_ref(),
+                    |_progress| {
+                        let _ = send_extract_progress(
+                            result_tx,
+                            request.token,
+                            request.batch.finished_archives(),
+                            Some(request.batch.total_archives),
+                            &mut last_progress_at,
+                        );
+                    },
+                    || {
+                        let stop = cancelled.load(Ordering::Relaxed)
+                            || cancel_token.load(Ordering::Relaxed) == request.token;
+                        if stop {
+                            stopped_early = true;
+                        }
+                        stop
+                    },
+                )
+            });
+
+        match result {
+            Ok(summary) if stopped_early => {
+                request.batch.dest_dirs.push(summary.dest_dir);
+                break;
+            }
+            Ok(summary) => {
+                if request.batch.is_single_archive() {
+                    let name = summary
+                        .dest_dir
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("folder")
+                        .to_string();
+                    let noun = if summary.completed == 1 {
+                        "item"
+                    } else {
+                        "items"
+                    };
+                    let link_note = match summary.skipped_links {
+                        0 => String::new(),
+                        1 => " — skipped 1 unsafe link".to_string(),
+                        count => format!(" — skipped {count} unsafe links"),
+                    };
+                    single_status = Some(format!(
+                        "Extracted {} {noun} to \"{name}\"{link_note}",
+                        summary.completed
+                    ));
+                }
+                request.batch.completed_archives += 1;
+                request.batch.dest_dirs.push(summary.dest_dir);
+                request.archives.remove(0);
+            }
+            Err(ExtractError::PasswordRequired) => {
+                request.password = None;
+                send_extract_done(
+                    result_tx,
+                    ArchiveExtractBuild {
+                        token: request.token,
+                        completed: request.batch.finished_archives(),
+                        total: Some(request.batch.total_archives),
+                        done: true,
+                        dest_dir: None,
+                        status: None,
+                        password_prompt: Some(ArchivePasswordPrompt::Required),
+                        password_request: Some(request),
+                    },
+                );
+                return;
+            }
+            Err(ExtractError::BadPassword) => {
+                request.password = None;
+                send_extract_done(
+                    result_tx,
+                    ArchiveExtractBuild {
+                        token: request.token,
+                        completed: request.batch.finished_archives(),
+                        total: Some(request.batch.total_archives),
+                        done: true,
+                        dest_dir: None,
+                        status: None,
+                        password_prompt: Some(ArchivePasswordPrompt::BadPassword),
+                        password_request: Some(request),
+                    },
+                );
+                return;
+            }
+            Err(error) => {
+                if request.batch.is_single_archive() {
+                    let name = archive_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("archive");
+                    single_error_status = Some(format!("Cannot extract \"{name}\" — {error}"));
+                }
+                request.batch.failed_archives += 1;
+                request.archives.remove(0);
+            }
+        }
+
+        let _ = send_extract_progress(
+            result_tx,
+            request.token,
+            request.batch.finished_archives(),
+            Some(request.batch.total_archives),
+            &mut last_progress_at,
+        );
+    }
+
+    let status = if stopped_early {
+        Some(format!(
+            "Extraction cancelled — extracted {} {}",
+            request.batch.completed_archives,
+            if request.batch.completed_archives == 1 {
+                "archive"
             } else {
-                "items"
-            };
-            (
-                Some(summary.dest_dir),
-                format!(
-                    "Extraction cancelled — extracted {} {noun}",
-                    summary.completed
-                ),
-            )
-        }
-        Ok(summary) => {
-            let name = summary
-                .dest_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("folder")
-                .to_string();
-            let noun = if summary.completed == 1 {
-                "item"
-            } else {
-                "items"
-            };
-            let link_note = match summary.skipped_links {
-                0 => String::new(),
-                1 => " — skipped 1 unsafe link".to_string(),
-                count => format!(" — skipped {count} unsafe links"),
-            };
-            (
-                Some(summary.dest_dir),
-                format!(
-                    "Extracted {} {noun} to \"{name}\"{link_note}",
-                    summary.completed
-                ),
-            )
-        }
-        Err(ExtractError::PasswordRequired) => {
-            password_prompt = Some(ArchivePasswordPrompt::Required);
-            (None, String::new())
-        }
-        Err(ExtractError::BadPassword) => {
-            password_prompt = Some(ArchivePasswordPrompt::BadPassword);
-            (None, String::new())
-        }
-        Err(error) => {
-            let name = request
-                .archive_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("archive");
-            (None, format!("Cannot extract \"{name}\" — {error}"))
-        }
+                "archives"
+            }
+        ))
+    } else {
+        single_status
+            .or(single_error_status)
+            .or_else(|| Some(request.batch.status()))
     };
-
-    let _ = result_tx.send(JobResult::ArchiveExtract(ArchiveExtractBuild {
-        token: request.token,
-        completed,
-        total,
-        done: true,
-        dest_dir,
-        status: (!status.is_empty()).then_some(status),
-        password_prompt,
-    }));
+    let dest_dir = request.batch.reselect_path();
+    send_extract_done(
+        result_tx,
+        ArchiveExtractBuild {
+            token: request.token,
+            completed: request.batch.finished_archives(),
+            total: Some(request.batch.total_archives),
+            done: true,
+            dest_dir,
+            status,
+            password_prompt: None,
+            password_request: None,
+        },
+    );
 }
 
 fn send_extract_progress(
@@ -245,6 +302,11 @@ fn send_extract_progress(
             dest_dir: None,
             status: None,
             password_prompt: None,
+            password_request: None,
         }))
         .is_ok()
+}
+
+fn send_extract_done(result_tx: &mpsc::Sender<JobResult>, build: ArchiveExtractBuild) {
+    let _ = result_tx.send(JobResult::ArchiveExtract(build));
 }

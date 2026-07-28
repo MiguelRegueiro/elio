@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use super::{
-    jobs::JobScheduler,
+    jobs::{ArchiveExtractRequest, JobScheduler},
     overlays::{comic, epub, images, inline_image, pdf},
     types::*,
 };
@@ -176,7 +176,7 @@ pub(super) struct ArchiveCreateOverlay {
 
 #[derive(Clone, Debug)]
 pub(super) enum ArchivePasswordPurpose {
-    Extract { archive_path: PathBuf },
+    Extract { request: ArchiveExtractRequest },
     Create,
 }
 
@@ -732,7 +732,7 @@ pub(in crate::app) struct JobRuntime {
     pub(in crate::app) archive_extract_token: u64,
     pub(in crate::app) archive_extract_progress: Option<ArchiveExtractProgress>,
     pub(in crate::app) archive_extract_source_cwd: Option<PathBuf>,
-    pub(in crate::app) archive_extract_path: Option<PathBuf>,
+    pub(in crate::app) archive_extract_request: Option<ArchiveExtractRequest>,
     pub(in crate::app) paste_token: u64,
     pub(in crate::app) paste_progress: Option<PasteProgress>,
     pub(in crate::app) queued_pastes: VecDeque<QueuedPaste>,
@@ -923,7 +923,7 @@ impl App {
                 archive_extract_token: 0,
                 archive_extract_progress: None,
                 archive_extract_source_cwd: None,
-                archive_extract_path: None,
+                archive_extract_request: None,
                 paste_token: 0,
                 paste_progress: None,
                 queued_pastes: VecDeque::new(),

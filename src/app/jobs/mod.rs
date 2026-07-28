@@ -12,14 +12,15 @@ pub(super) use self::metrics::SchedulerMetricsSnapshot;
 pub(super) use self::scheduler::JobScheduler;
 use self::sync::{lock_unpoison, wait_unpoison};
 pub(super) use self::types::{
-    ArchiveCreateBuild, ArchiveCreateRequest, ArchiveExtractBuild, ArchiveExtractRequest,
-    ArchivePasswordPrompt, DirectoryBuild, DirectoryFingerprintBuild, DirectoryFingerprintRequest,
-    DirectoryItemCountBuild, DirectoryItemCountRequest, DirectoryRequest, DirectoryStatsBuild,
-    DirectoryStatsRequest, GitStatusBuild, GitStatusRequest, ImageJobPriority, ImagePrepareBuild,
-    ImagePrepareRequest, JobResult, PasteBuild, PasteRequest, PdfJobPriority, PdfProbeBuild,
-    PdfProbeRequest, PdfRenderBuild, PdfRenderRequest, PreviewBuild, PreviewLineCountBuild,
-    PreviewLineCountRequest, PreviewPriority, PreviewRequest, RestoreBuild, RestoreRequest,
-    SearchBatchBuild, SearchBuild, SearchRequest, SixelPrepareConfig, TrashBuild, TrashRequest,
+    ArchiveCreateBuild, ArchiveCreateRequest, ArchiveExtractBatchState, ArchiveExtractBuild,
+    ArchiveExtractRequest, ArchivePasswordPrompt, DirectoryBuild, DirectoryFingerprintBuild,
+    DirectoryFingerprintRequest, DirectoryItemCountBuild, DirectoryItemCountRequest,
+    DirectoryRequest, DirectoryStatsBuild, DirectoryStatsRequest, GitStatusBuild, GitStatusRequest,
+    ImageJobPriority, ImagePrepareBuild, ImagePrepareRequest, JobResult, PasteBuild, PasteRequest,
+    PdfJobPriority, PdfProbeBuild, PdfProbeRequest, PdfRenderBuild, PdfRenderRequest, PreviewBuild,
+    PreviewLineCountBuild, PreviewLineCountRequest, PreviewPriority, PreviewRequest, RestoreBuild,
+    RestoreRequest, SearchBatchBuild, SearchBuild, SearchRequest, SixelPrepareConfig, TrashBuild,
+    TrashRequest,
 };
 use self::{config::SchedulerConfig, metrics::SchedulerMetrics};
 #[cfg(test)]

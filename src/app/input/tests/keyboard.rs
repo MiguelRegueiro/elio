@@ -243,7 +243,15 @@ fn pasted_text_updates_archive_create_name_at_cursor() {
 fn pasted_text_updates_archive_password_and_flattens_newlines() {
     let root = temp_path("paste-archive-password");
     let mut app = App::new_at(root.clone()).expect("failed to create app");
-    app.open_archive_password_prompt(root.join("archive.zip"), None);
+    app.open_archive_password_prompt(
+        crate::app::jobs::ArchiveExtractRequest {
+            token: 0,
+            archives: vec![root.join("archive.zip")],
+            password: None,
+            batch: crate::app::jobs::ArchiveExtractBatchState::new(1, 0),
+        },
+        None,
+    );
 
     app.handle_event(Event::Paste("pa\nss".to_string()))
         .expect("paste event should update archive password prompt");

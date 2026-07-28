@@ -5,7 +5,6 @@ use crate::app::text_edit::{
 };
 use crate::archive::{ArchiveEncryption, ArchivePassword};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use std::path::PathBuf;
 
 impl App {
     pub fn archive_extract_progress(&self) -> Option<(usize, Option<usize>)> {
@@ -21,6 +20,10 @@ impl App {
             return Ok(());
         }
 
+        if self.selection_count() > 0 {
+            return self.extract_selected_archives();
+        }
+
         let Some(entry) = self.selected_entry() else {
             self.status = "Select an archive to extract".to_string();
             return Ok(());
@@ -31,7 +34,46 @@ impl App {
         }
 
         let archive_path = entry.path.clone();
-        let _ = self.start_archive_extract(archive_path, None)?;
+        let request = ArchiveExtractRequest {
+            token: 0,
+            archives: vec![archive_path.clone()],
+            password: None,
+            batch: ArchiveExtractBatchState::new(1, 0),
+        };
+        if let Err(error) = crate::archive::plan_extract(&archive_path) {
+            self.status = error.to_string();
+            return Ok(());
+        }
+        let _ = self.start_archive_extract(request)?;
+        Ok(())
+    }
+
+    fn extract_selected_archives(&mut self) -> Result<()> {
+        let selected = self.selected_paths_sorted();
+        let mut archives = Vec::new();
+        let mut skipped_non_archives = 0usize;
+        for path in selected {
+            if path.is_file() && crate::archive::plan_extract(&path).is_ok() {
+                archives.push(path);
+            } else {
+                skipped_non_archives += 1;
+            }
+        }
+
+        if archives.is_empty() {
+            self.status = "No archives selected".to_string();
+            return Ok(());
+        }
+
+        let request = ArchiveExtractRequest {
+            token: 0,
+            batch: ArchiveExtractBatchState::new(archives.len(), skipped_non_archives),
+            archives,
+            password: None,
+        };
+        if self.start_archive_extract(request)? {
+            self.navigation.selected_paths.clear();
+        }
         Ok(())
     }
 
@@ -44,8 +86,10 @@ impl App {
             return "archive".to_string();
         };
         match &overlay.purpose {
-            ArchivePasswordPurpose::Extract { archive_path } => archive_path
-                .file_name()
+            ArchivePasswordPurpose::Extract { request } => request
+                .archives
+                .first()
+                .and_then(|path| path.file_name())
                 .and_then(|name| name.to_str())
                 .unwrap_or("archive")
                 .to_string(),
@@ -105,7 +149,7 @@ impl App {
 
     pub(in crate::app) fn open_archive_password_prompt(
         &mut self,
-        archive_path: PathBuf,
+        request: ArchiveExtractRequest,
         error: Option<String>,
     ) {
         self.overlays.help = false;
@@ -119,7 +163,7 @@ impl App {
         self.overlays.open_with = None;
         self.overlays.search = None;
         self.overlays.archive_password = Some(ArchivePasswordOverlay {
-            purpose: ArchivePasswordPurpose::Extract { archive_path },
+            purpose: ArchivePasswordPurpose::Extract { request },
             input: String::new(),
             cursor_col: 0,
             visible: false,
@@ -143,7 +187,7 @@ impl App {
 
     pub(in crate::app) fn handle_archive_password_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            self.overlays.archive_password = None;
+            self.cancel_archive_password_prompt()?;
             return Ok(());
         }
 
@@ -154,7 +198,7 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                self.overlays.archive_password = None;
+                self.cancel_archive_password_prompt()?;
             }
             KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
                 self.confirm_archive_password()?;
@@ -304,7 +348,7 @@ impl App {
                 .archive_password_panel
                 .is_some_and(|panel| rect_contains(panel, mouse.column, mouse.row));
             if !inside {
-                self.overlays.archive_password = None;
+                self.cancel_archive_password_prompt()?;
             }
         }
         Ok(())
@@ -323,9 +367,10 @@ impl App {
         }
 
         match &overlay.purpose {
-            ArchivePasswordPurpose::Extract { archive_path } => {
-                let archive_path = archive_path.clone();
-                if self.start_archive_extract(archive_path, Some(ArchivePassword::new(password)))? {
+            ArchivePasswordPurpose::Extract { request } => {
+                let mut request = request.clone();
+                request.password = Some(ArchivePassword::new(password));
+                if self.start_archive_extract(request)? {
                     self.overlays.archive_password = None;
                 }
             }
@@ -342,43 +387,87 @@ impl App {
         Ok(())
     }
 
-    fn start_archive_extract(
-        &mut self,
-        archive_path: PathBuf,
-        password: Option<ArchivePassword>,
-    ) -> Result<bool> {
+    fn cancel_archive_password_prompt(&mut self) -> Result<()> {
+        let Some(overlay) = self.overlays.archive_password.take() else {
+            return Ok(());
+        };
+        if let ArchivePasswordPurpose::Extract { request } = overlay.purpose {
+            self.skip_password_archive(request)?;
+        }
+        Ok(())
+    }
+
+    fn skip_password_archive(&mut self, mut request: ArchiveExtractRequest) -> Result<()> {
+        if !request.archives.is_empty() {
+            request.archives.remove(0);
+            request.batch.skipped_archives += 1;
+        }
+        request.password = None;
+        if request.archives.is_empty() {
+            self.finish_archive_extract_batch(request.batch);
+            return Ok(());
+        }
+        let _ = self.start_archive_extract(request)?;
+        Ok(())
+    }
+
+    pub(in crate::app) fn finish_archive_extract_batch(&mut self, batch: ArchiveExtractBatchState) {
+        let status = batch.status();
+        let dest_dir = batch.reselect_path();
+        let source_cwd = self
+            .jobs
+            .archive_extract_source_cwd
+            .take()
+            .unwrap_or_else(|| self.navigation.cwd.clone());
+        self.jobs.archive_extract_request = None;
+        let nav_target = self
+            .navigation
+            .directory_runtime
+            .pending_load
+            .as_ref()
+            .map(|l| l.target_cwd.as_path());
+        let nav_to_source = nav_target == Some(source_cwd.as_path());
+        if nav_to_source || (source_cwd == self.navigation.cwd && nav_target.is_none()) {
+            let _ = self.queue_directory_load(PendingDirectoryLoad {
+                token: 0,
+                target_cwd: source_cwd,
+                previous_cwd: self.navigation.cwd.clone(),
+                previous_selected_path: None,
+                previous_selection_name: None,
+                reselect_path: dest_dir,
+                history_mode: DirectoryHistoryMode::None,
+                refresh_search: false,
+                completion: DirectoryLoadCompletion::Status(status),
+            });
+        } else {
+            self.status = status;
+        }
+    }
+
+    fn start_archive_extract(&mut self, mut request: ArchiveExtractRequest) -> Result<bool> {
         if self.jobs.archive_extract_progress.is_some() {
             self.status = "Extraction already in progress".to_string();
             return Ok(false);
         }
 
-        if let Err(error) = crate::archive::plan_extract(&archive_path) {
-            self.status = error.to_string();
-            return Ok(false);
-        }
-
         let token = self.jobs.archive_extract_token.wrapping_add(1);
         self.jobs.archive_extract_token = token;
+        request.token = token;
         self.jobs.archive_extract_progress = Some(ArchiveExtractProgress {
-            completed: 0,
-            total: None,
+            completed: request.batch.finished_archives(),
+            total: Some(request.batch.total_archives),
         });
-        self.jobs.archive_extract_source_cwd = Some(self.navigation.cwd.clone());
-        self.jobs.archive_extract_path = Some(archive_path.clone());
+        if self.jobs.archive_extract_source_cwd.is_none() {
+            self.jobs.archive_extract_source_cwd = Some(self.navigation.cwd.clone());
+        }
+        self.jobs.archive_extract_request = Some(request.clone());
         self.status.clear();
 
-        let submitted = self
-            .jobs
-            .scheduler
-            .submit_archive_extract(ArchiveExtractRequest {
-                token,
-                archive_path,
-                password,
-            });
+        let submitted = self.jobs.scheduler.submit_archive_extract(request);
         if !submitted {
             self.jobs.archive_extract_progress = None;
             self.jobs.archive_extract_source_cwd = None;
-            self.jobs.archive_extract_path = None;
+            self.jobs.archive_extract_request = None;
             self.status = "Extraction already in progress".to_string();
             return Ok(false);
         }

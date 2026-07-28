@@ -279,10 +279,90 @@ pub(in crate::app) struct ArchiveCreateBuild {
 }
 
 #[derive(Clone, Debug)]
+pub(in crate::app) struct ArchiveExtractBatchState {
+    pub(in crate::app) total_archives: usize,
+    pub(in crate::app) completed_archives: usize,
+    pub(in crate::app) failed_archives: usize,
+    pub(in crate::app) skipped_archives: usize,
+    pub(in crate::app) skipped_non_archives: usize,
+    pub(in crate::app) dest_dirs: Vec<PathBuf>,
+}
+
+impl ArchiveExtractBatchState {
+    pub(in crate::app) fn new(total_archives: usize, skipped_non_archives: usize) -> Self {
+        Self {
+            total_archives,
+            completed_archives: 0,
+            failed_archives: 0,
+            skipped_archives: 0,
+            skipped_non_archives,
+            dest_dirs: Vec::new(),
+        }
+    }
+
+    pub(in crate::app) fn finished_archives(&self) -> usize {
+        self.completed_archives + self.failed_archives + self.skipped_archives
+    }
+
+    pub(in crate::app) fn is_single_archive(&self) -> bool {
+        self.total_archives == 1 && self.skipped_non_archives == 0
+    }
+
+    pub(in crate::app) fn reselect_path(&self) -> Option<PathBuf> {
+        self.is_single_archive()
+            .then(|| self.dest_dirs.first().cloned())
+            .flatten()
+    }
+
+    pub(in crate::app) fn status(&self) -> String {
+        if self.is_single_archive()
+            && self.completed_archives == 1
+            && let Some(dest_dir) = self.dest_dirs.first()
+        {
+            let name = dest_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("folder");
+            return format!("Extracted 1 archive to \"{name}\"");
+        }
+
+        let mut parts = Vec::new();
+        parts.push(format!(
+            "Extracted {} {}",
+            self.completed_archives,
+            if self.completed_archives == 1 {
+                "archive"
+            } else {
+                "archives"
+            }
+        ));
+        if self.failed_archives > 0 {
+            parts.push(format!("{} failed", self.failed_archives));
+        }
+        if self.skipped_archives > 0 {
+            parts.push(format!("{} skipped", self.skipped_archives));
+        }
+        if self.skipped_non_archives > 0 {
+            parts.push(format!(
+                "skipped {} {}",
+                self.skipped_non_archives,
+                if self.skipped_non_archives == 1 {
+                    "non-archive"
+                } else {
+                    "non-archives"
+                }
+            ));
+        }
+        parts.join(", ")
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(in crate::app) struct ArchiveExtractRequest {
     pub(in crate::app) token: u64,
-    pub(in crate::app) archive_path: PathBuf,
+    pub(in crate::app) archives: Vec<PathBuf>,
     pub(in crate::app) password: Option<crate::archive::ArchivePassword>,
+    pub(in crate::app) batch: ArchiveExtractBatchState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -304,6 +384,8 @@ pub(in crate::app) struct ArchiveExtractBuild {
     pub(in crate::app) status: Option<String>,
     /// Populated only when `done = true` and extraction needs password input.
     pub(in crate::app) password_prompt: Option<ArchivePasswordPrompt>,
+    /// Remaining batch to resume after password input.
+    pub(in crate::app) password_request: Option<ArchiveExtractRequest>,
 }
 
 #[derive(Clone, Debug)]
