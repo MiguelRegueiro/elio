@@ -21,7 +21,8 @@ mod types;
 #[cfg(test)]
 use self::jobs::SchedulerMetricsSnapshot;
 use self::jobs::{
-    ArchiveExtractRequest, PreviewLineCountRequest, PreviewPriority, PreviewRequest, SearchRequest,
+    ArchiveExtractBatchState, ArchiveExtractRequest, PreviewLineCountRequest, PreviewPriority,
+    PreviewRequest, SearchRequest,
 };
 use self::{constants::*, state::*};
 use anyhow::Result;

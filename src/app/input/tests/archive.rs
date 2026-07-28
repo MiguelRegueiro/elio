@@ -39,6 +39,128 @@ fn e_extracts_focused_zip_archive() {
 }
 
 #[test]
+fn e_extracts_selected_archives_as_one_batch_and_skips_other_files() {
+    let root = temp_path("extract-selected-archives");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let alpha = root.join("alpha.zip");
+    let beta = root.join("beta.zip");
+    let notes = root.join("notes.pdf");
+    write_binary_zip_entries(&alpha, &[("file.txt", b"alpha")]);
+    write_binary_zip_entries(&beta, &[("file.txt", b"beta")]);
+    fs::write(&notes, b"not an archive").expect("failed to write non-archive");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    app.navigation.selected_paths.insert(alpha.clone());
+    app.navigation.selected_paths.insert(beta.clone());
+    app.navigation.selected_paths.insert(notes);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('e'))))
+        .expect("e should start batch archive extraction");
+    assert!(
+        app.navigation.selected_paths.is_empty(),
+        "selected archives should be consumed once extraction starts"
+    );
+
+    let alpha_file = root.join("alpha/file.txt");
+    let beta_file = root.join("beta/file.txt");
+    for _ in 0..300 {
+        let _ = app.process_background_jobs();
+        if alpha_file.exists() && beta_file.exists() && app.jobs.archive_extract_progress.is_none()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    wait_for_directory_load(&mut app);
+
+    assert_eq!(fs::read_to_string(&alpha_file).unwrap(), "alpha");
+    assert_eq!(fs::read_to_string(&beta_file).unwrap(), "beta");
+    assert_eq!(
+        app.status_message(),
+        "Extracted 2 archives, skipped 1 non-archive"
+    );
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn e_reports_no_archives_selected_for_non_archive_selection() {
+    let root = temp_path("extract-no-selected-archives");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let notes = root.join("notes.pdf");
+    fs::write(&notes, b"not an archive").expect("failed to write non-archive");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    app.navigation.selected_paths.insert(notes);
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('e'))))
+        .expect("e should handle non-archive selection");
+
+    assert_eq!(app.status_message(), "No archives selected");
+    assert!(app.jobs.archive_extract_progress.is_none());
+    assert_eq!(
+        app.navigation.selected_paths.len(),
+        1,
+        "selection should stay when extraction does not start"
+    );
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
+fn e_skips_password_archive_on_cancel_and_continues_batch() {
+    let root = temp_path("extract-skip-password-archive");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let secret = root.join("secret.zip");
+    let alpha = root.join("alpha.zip");
+    let beta = root.join("beta.zip");
+    let password = archive_test_password(&root);
+    write_encrypted_zip_entries(&secret, &password, &[("file.txt", b"secret")]);
+    write_binary_zip_entries(&alpha, &[("file.txt", b"alpha")]);
+    write_binary_zip_entries(&beta, &[("file.txt", b"beta")]);
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    wait_for_directory_load(&mut app);
+    app.navigation.selected_paths.insert(secret.clone());
+    app.navigation.selected_paths.insert(alpha.clone());
+    app.navigation.selected_paths.insert(beta.clone());
+
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Char('e'))))
+        .expect("e should start batch archive extraction");
+    assert!(
+        app.navigation.selected_paths.is_empty(),
+        "selected archives should be consumed before the password prompt"
+    );
+    wait_for_archive_password_prompt(&mut app);
+    app.handle_event(Event::Key(KeyEvent::from(KeyCode::Esc)))
+        .expect("esc should skip password archive");
+
+    let alpha_file = root.join("alpha/file.txt");
+    let beta_file = root.join("beta/file.txt");
+    for _ in 0..300 {
+        let _ = app.process_background_jobs();
+        if alpha_file.exists()
+            && beta_file.exists()
+            && app.jobs.archive_extract_progress.is_none()
+            && !app.archive_password_is_open()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    wait_for_directory_load(&mut app);
+
+    assert!(!root.join("secret/file.txt").exists());
+    assert_eq!(fs::read_to_string(&alpha_file).unwrap(), "alpha");
+    assert_eq!(fs::read_to_string(&beta_file).unwrap(), "beta");
+    assert_eq!(app.status_message(), "Extracted 2 archives, 1 skipped");
+
+    cleanup_app_temp_root(app, root);
+}
+
+#[test]
 fn e_prompts_and_retries_encrypted_seven_zip_archive() {
     let root = temp_path("extract-encrypted-7z-key");
     fs::create_dir_all(&root).expect("failed to create temp root");

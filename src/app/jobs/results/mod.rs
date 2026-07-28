@@ -288,23 +288,22 @@ impl App {
                     if build.done {
                         self.jobs.archive_extract_progress = None;
                         if let Some(prompt) = build.password_prompt {
-                            let archive_path = self.jobs.archive_extract_path.take();
-                            self.jobs.archive_extract_source_cwd = None;
-                            if let Some(archive_path) = archive_path {
+                            if let Some(request) = build.password_request {
                                 let error = match prompt {
                                     ArchivePasswordPrompt::Required => None,
                                     ArchivePasswordPrompt::BadPassword => {
                                         Some("Wrong password".to_string())
                                     }
                                 };
-                                self.open_archive_password_prompt(archive_path, error);
+                                self.jobs.archive_extract_request = Some(request.clone());
+                                self.open_archive_password_prompt(request, error);
                             } else {
                                 self.status = "Archive requires a password".to_string();
                             }
                             dirty = true;
                             continue;
                         }
-                        self.jobs.archive_extract_path = None;
+                        self.jobs.archive_extract_request = None;
                         let source_cwd = self
                             .jobs
                             .archive_extract_source_cwd
