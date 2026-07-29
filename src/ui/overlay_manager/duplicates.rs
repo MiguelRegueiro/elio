@@ -102,8 +102,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
         format!("error: {error}")
     } else if app.duplicate_loading() {
         format!(
-            "scanning…  •  {} files scanned  •  {} groups  •  {} reclaimable",
+            "{}…  •  {} files  •  {} candidates  •  {} hashed  •  {} groups  •  {} reclaimable",
+            stats.phase.label(),
             stats.scanned_files,
+            stats.candidate_files,
+            stats.hashed_files,
             app.duplicate_group_count(),
             crate::fs::format_size(stats.duplicate_bytes),
         )
@@ -145,11 +148,13 @@ fn render_results(
     }
     if app.duplicate_file_count() == 0 {
         let message = if app.duplicate_loading() {
-            "Scanning for exact duplicates…"
+            app.duplicate_stats()
+                .map(|stats| format!("{} for exact duplicates…", stats.phase.label()))
+                .unwrap_or_else(|| "Scanning for exact duplicates…".to_string())
         } else {
-            "No exact duplicate files found"
+            "No exact duplicate files found".to_string()
         };
-        helpers::render_empty_state_with_bg(frame, area, message, palette, palette.chrome_alt);
+        helpers::render_empty_state_with_bg(frame, area, &message, palette, palette.chrome_alt);
         return;
     }
 

@@ -11,12 +11,13 @@ use std::{
 const DUPLICATE_NODE_VISIT_LIMIT: usize = 5_000_000;
 const HASH_CHUNK_SIZE: usize = 1024 * 1024;
 const PARTIAL_CHUNK_SIZE: usize = 64 * 1024;
-const SCAN_YIELD_NODES: usize = 128;
-const SCAN_SLEEP_NODES: usize = 2_048;
-const HASH_YIELD_CHUNKS: usize = 4;
-const HASH_SLEEP_CHUNKS: usize = 16;
+const SCAN_YIELD_NODES: usize = 512;
+const SCAN_SLEEP_NODES: usize = 16_384;
+const HASH_YIELD_CHUNKS: usize = 16;
+const HASH_SLEEP_CHUNKS: usize = 128;
 const DUPLICATE_BATCH_GROUP_SIZE: usize = 128;
 const DUPLICATE_BATCH_MAX_LATENCY: Duration = Duration::from_millis(120);
+const SMALL_FILE_FULL_HASH_LIMIT: u64 = 256 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DuplicateFile {
@@ -42,10 +43,37 @@ impl DuplicateGroup {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DuplicateScanPhase {
+    #[default]
+    Walking,
+    SizeGrouping,
+    PartialHashing,
+    FullHashing,
+    Verifying,
+    Complete,
+}
+
+impl DuplicateScanPhase {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Walking => "walking",
+            Self::SizeGrouping => "grouping",
+            Self::PartialHashing => "fingerprinting",
+            Self::FullHashing => "hashing",
+            Self::Verifying => "verifying",
+            Self::Complete => "complete",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DuplicateScanStats {
+    pub(crate) phase: DuplicateScanPhase,
     pub(crate) visited_nodes: usize,
     pub(crate) scanned_files: usize,
     pub(crate) candidate_files: usize,
+    pub(crate) hashed_files: usize,
+    pub(crate) verified_files: usize,
     pub(crate) groups: usize,
     pub(crate) duplicate_bytes: u64,
     pub(crate) node_limit_reached: bool,
@@ -79,19 +107,31 @@ pub(crate) fn scan_duplicates_streaming(
     mut emit_batch: impl FnMut(DuplicateScanBatch) -> bool,
 ) -> Result<DuplicateScanResult> {
     let (size_groups, mut stats) = collect_size_candidates(cwd, show_hidden, &is_canceled)?;
+    stats.phase = DuplicateScanPhase::SizeGrouping;
+    stats.candidate_files = size_groups.values().map(Vec::len).sum();
+    let mut size_buckets = size_groups.into_values().collect::<Vec<_>>();
+    size_buckets.sort_by(compare_candidate_buckets);
+
     let mut groups = Vec::new();
     let mut next_id = 1u64;
     let mut batch_emitter = DuplicateBatchEmitter::new(&mut emit_batch);
+    if !batch_emitter.emit_progress(stats) {
+        return Ok(DuplicateScanResult { groups, stats });
+    }
 
-    for candidates in size_groups.into_values() {
+    for candidates in size_buckets {
         if is_canceled() {
             break;
         }
         if candidates.len() < 2 {
             continue;
         }
-        stats.candidate_files += candidates.len();
-        let verified = verified_groups_for_same_size(candidates, &is_canceled)?;
+        let verified = verified_groups_for_same_size(
+            candidates,
+            &mut stats,
+            &mut batch_emitter,
+            &is_canceled,
+        )?;
         for files in verified {
             if files.len() < 2 {
                 continue;
@@ -115,6 +155,7 @@ pub(crate) fn scan_duplicates_streaming(
             groups.push(group);
         }
     }
+    stats.phase = DuplicateScanPhase::Complete;
     let _ = batch_emitter.flush(stats);
     groups.sort_by(compare_groups);
     Ok(DuplicateScanResult { groups, stats })
@@ -136,7 +177,7 @@ where
     fn new(emit_batch: &'a mut F) -> Self {
         Self {
             pending: Vec::with_capacity(DUPLICATE_BATCH_GROUP_SIZE),
-            last_emit: Instant::now(),
+            last_emit: Instant::now() - DUPLICATE_BATCH_MAX_LATENCY,
             emit_batch,
         }
     }
@@ -149,6 +190,20 @@ where
             return self.flush(stats);
         }
         true
+    }
+
+    fn emit_progress(&mut self, stats: DuplicateScanStats) -> bool {
+        if !self.pending.is_empty() {
+            return true;
+        }
+        if self.last_emit.elapsed() < DUPLICATE_BATCH_MAX_LATENCY {
+            return true;
+        }
+        self.last_emit = Instant::now();
+        (self.emit_batch)(DuplicateScanBatch {
+            groups: Vec::new(),
+            stats,
+        })
     }
 
     fn flush(&mut self, stats: DuplicateScanStats) -> bool {
@@ -249,20 +304,41 @@ fn collect_size_candidates(
     Ok((size_groups, stats))
 }
 
-fn verified_groups_for_same_size(
+fn verified_groups_for_same_size<F>(
     candidates: Vec<CandidateFile>,
+    stats: &mut DuplicateScanStats,
+    batch_emitter: &mut DuplicateBatchEmitter<'_, F>,
     is_canceled: &impl Fn() -> bool,
-) -> Result<Vec<Vec<DuplicateFile>>> {
-    let candidates = partial_duplicate_candidates(candidates, is_canceled);
+) -> Result<Vec<Vec<DuplicateFile>>>
+where
+    F: FnMut(DuplicateScanBatch) -> bool,
+{
+    let candidates = if candidates
+        .first()
+        .is_some_and(|candidate| candidate.size <= SMALL_FILE_FULL_HASH_LIMIT)
+    {
+        candidates
+    } else {
+        stats.phase = DuplicateScanPhase::PartialHashing;
+        let _ = batch_emitter.emit_progress(*stats);
+        partial_duplicate_candidates(candidates, is_canceled)
+    };
+
+    stats.phase = DuplicateScanPhase::FullHashing;
+    let _ = batch_emitter.emit_progress(*stats);
     let mut by_hash: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
     for candidate in candidates {
         if is_canceled() {
             break;
         }
         if let Ok(hash) = content_hash(&candidate.path) {
+            stats.hashed_files += 1;
             by_hash.entry(hash).or_default().push(candidate);
         }
     }
+
+    stats.phase = DuplicateScanPhase::Verifying;
+    let _ = batch_emitter.emit_progress(*stats);
     let mut groups = Vec::new();
     for same_hash in by_hash.into_values().filter(|files| files.len() > 1) {
         let mut representatives: Vec<Vec<CandidateFile>> = Vec::new();
@@ -270,6 +346,7 @@ fn verified_groups_for_same_size(
             if is_canceled() {
                 break;
             }
+            stats.verified_files += 1;
             for group in &mut representatives {
                 if files_equal(&candidate.path, &group[0].path).unwrap_or(false) {
                     group.push(candidate);
@@ -414,6 +491,28 @@ fn compare_groups(left: &DuplicateGroup, right: &DuplicateGroup) -> std::cmp::Or
         })
 }
 
+fn compare_candidate_buckets(
+    left: &Vec<CandidateFile>,
+    right: &Vec<CandidateFile>,
+) -> std::cmp::Ordering {
+    duplicate_candidate_bytes(right)
+        .cmp(&duplicate_candidate_bytes(left))
+        .then_with(|| {
+            right
+                .first()
+                .map_or(0, |file| file.size)
+                .cmp(&left.first().map_or(0, |file| file.size))
+        })
+        .then_with(|| right.len().cmp(&left.len()))
+}
+
+fn duplicate_candidate_bytes(files: &[CandidateFile]) -> u64 {
+    files.first().map_or(0, |file| {
+        file.size
+            .saturating_mul(files.len().saturating_sub(1) as u64)
+    })
+}
+
 fn should_prune_dir(name_key: &str) -> bool {
     matches!(name_key, ".git" | "node_modules" | "target")
 }
@@ -475,8 +574,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.groups.len(), 3);
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].groups.len(), 3);
+        let group_batches = batches
+            .iter()
+            .filter(|batch| !batch.groups.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(group_batches.len(), 1);
+        assert_eq!(group_batches[0].groups.len(), 3);
+        assert_eq!(result.stats.phase, DuplicateScanPhase::Complete);
+        assert_eq!(result.stats.candidate_files, 6);
+        assert_eq!(result.stats.hashed_files, 6);
         fs::remove_dir_all(root).unwrap();
     }
 
