@@ -154,7 +154,7 @@ pub(crate) fn scan_duplicates_streaming_with_cache(
     stats.phase = DuplicateScanPhase::SizeGrouping;
     stats.candidate_files = size_groups.values().map(Vec::len).sum();
     let mut size_buckets = size_groups.into_values().collect::<Vec<_>>();
-    size_buckets.sort_by(compare_candidate_buckets);
+    size_buckets.sort_by(|left, right| compare_candidate_buckets(left, right));
 
     let mut groups = Vec::new();
     let mut next_id = 1u64;
@@ -539,18 +539,18 @@ fn content_hash<F>(
 where
     F: FnMut(DuplicateScanBatch) -> bool,
 {
-    if let Some(cache_key) = &candidate.cache_key {
-        if let Some(hash) = cache.get(cache_key) {
-            stats.cached_hashes += 1;
-            return Ok(Some(hash));
-        }
+    if let Some(cache_key) = &candidate.cache_key
+        && let Some(hash) = cache.get(cache_key)
+    {
+        stats.cached_hashes += 1;
+        return Ok(Some(hash));
     }
 
     let hash = content_hash_uncached(&candidate.path, stats, batch_emitter, is_canceled)?;
-    if let Some(hash) = hash {
-        if let Some(cache_key) = &candidate.cache_key {
-            cache.insert(cache_key.clone(), hash);
-        }
+    if let Some(hash) = hash
+        && let Some(cache_key) = &candidate.cache_key
+    {
+        cache.insert(cache_key.clone(), hash);
     }
     Ok(hash)
 }
@@ -640,8 +640,8 @@ fn compare_groups(left: &DuplicateGroup, right: &DuplicateGroup) -> std::cmp::Or
 }
 
 fn compare_candidate_buckets(
-    left: &Vec<CandidateFile>,
-    right: &Vec<CandidateFile>,
+    left: &[CandidateFile],
+    right: &[CandidateFile],
 ) -> std::cmp::Ordering {
     candidate_bucket_priority(left).cmp(&candidate_bucket_priority(right))
 }
@@ -729,7 +729,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         ];
 
-        buckets.sort_by(compare_candidate_buckets);
+        buckets.sort_by(|left, right| compare_candidate_buckets(left, right));
 
         assert_eq!(buckets[0][0].size, 1024);
         assert_eq!(buckets[1][0].size, huge_size);

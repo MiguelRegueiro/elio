@@ -255,6 +255,14 @@ impl App {
                     self.open_duplicate_targets()?;
                     return Ok(());
                 }
+                Action::OpenOrEnter => {
+                    self.reveal_duplicate_focus()?;
+                    return Ok(());
+                }
+                Action::CopyPath => {
+                    self.open_copy_overlay_for_paths(self.duplicate_action_paths());
+                    return Ok(());
+                }
                 Action::Rename => {
                     self.open_duplicate_rename();
                     return Ok(());
@@ -271,43 +279,64 @@ impl App {
                     self.select_all_duplicates();
                     return Ok(());
                 }
+                Action::ToggleSelection => {
+                    self.toggle_duplicate_selection();
+                    return Ok(());
+                }
                 Action::FindDuplicates => {
                     self.close_duplicate_finder();
+                    return Ok(());
+                }
+                Action::NavUp => {
+                    self.move_duplicate_selection(-1);
+                    return Ok(());
+                }
+                Action::NavDown => {
+                    self.move_duplicate_selection(1);
+                    return Ok(());
+                }
+                Action::PageUp => {
+                    self.page_duplicate_selection(-1);
+                    return Ok(());
+                }
+                Action::PageDown => {
+                    self.page_duplicate_selection(1);
+                    return Ok(());
+                }
+                Action::JumpFirst => {
+                    self.set_duplicate_selection(0);
+                    return Ok(());
+                }
+                Action::JumpLast => {
+                    let last = self.duplicate_file_count().saturating_sub(1);
+                    self.set_duplicate_selection(last);
+                    return Ok(());
+                }
+                Action::TogglePreview => {
+                    self.toggle_duplicate_preview();
+                    return Ok(());
+                }
+                Action::ScrollPreviewUp => {
+                    self.scroll_preview_lines(-1);
+                    return Ok(());
+                }
+                Action::ScrollPreviewDown => {
+                    self.scroll_preview_lines(1);
+                    return Ok(());
+                }
+                Action::ScrollPreviewLeft => {
+                    self.scroll_preview_columns(-1);
+                    return Ok(());
+                }
+                Action::ScrollPreviewRight => {
+                    self.scroll_preview_columns(1);
                     return Ok(());
                 }
                 _ => {}
             }
         }
-        match key.code {
-            KeyCode::Esc => self.clear_duplicate_selection_or_close(),
-            KeyCode::Up | KeyCode::Char('k') => self.move_duplicate_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.move_duplicate_selection(1),
-            KeyCode::PageUp => self.page_duplicate_selection(-1),
-            KeyCode::PageDown => self.page_duplicate_selection(1),
-            KeyCode::Home => self.set_duplicate_selection(0),
-            KeyCode::End => {
-                let last = self.duplicate_file_count().saturating_sub(1);
-                self.set_duplicate_selection(last);
-            }
-            KeyCode::Char(' ') => self.toggle_duplicate_selection(),
-            KeyCode::Enter => self.reveal_duplicate_focus()?,
-            KeyCode::Char('o') => self.open_duplicate_targets()?,
-            KeyCode::Char('r') => self.open_duplicate_rename(),
-            KeyCode::Char('d') => self.open_duplicate_trash_prompt(),
-            KeyCode::Char('V') => self.toggle_duplicate_preview(),
-            KeyCode::Char('J') => {
-                self.scroll_preview_lines(1);
-            }
-            KeyCode::Char('K') => {
-                self.scroll_preview_lines(-1);
-            }
-            KeyCode::Char('H') => {
-                self.scroll_preview_columns(-1);
-            }
-            KeyCode::Char('L') => {
-                self.scroll_preview_columns(1);
-            }
-            _ => {}
+        if key.modifiers == KeyModifiers::NONE && matches!(key.code, KeyCode::Esc) {
+            self.clear_duplicate_selection_or_close();
         }
         Ok(())
     }
@@ -1144,6 +1173,70 @@ mod tests {
         assert!(app.sync_duplicate_scroll());
         assert_eq!(app.duplicate_scroll_top(), 54);
         assert_eq!(app.duplicate_rows(30).len(), 30);
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_finder_shift_nav_does_not_move_file_focus() {
+        let root = temp_path("shift-nav-no-focus-move");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(1, 10, &["alpha.webp", "beta.webp"])];
+        overlay.loading = false;
+        overlay.selected = 0;
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT))
+            .expect("Shift+Down should not move Duplicate Finder focus");
+
+        assert_eq!(
+            app.overlays
+                .duplicates
+                .as_ref()
+                .expect("duplicate overlay should remain open")
+                .selected,
+            0
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_finder_shift_v_toggles_preview_without_moving_focus() {
+        let root = temp_path("shift-v-preview-toggle");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(1, 10, &["alpha.webp", "beta.webp"])];
+        overlay.loading = false;
+        overlay.selected = 0;
+        overlay.preview_visible = true;
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT))
+            .expect("Shift+V should toggle Duplicate Finder preview");
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_ref()
+            .expect("duplicate overlay should remain open");
+        assert_eq!(overlay.selected, 0);
+        assert!(!overlay.preview_visible);
 
         app.close_duplicate_finder();
         fs::remove_dir_all(root).expect("failed to remove temp root");
