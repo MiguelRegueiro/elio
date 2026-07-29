@@ -75,7 +75,6 @@ pub(in crate::app) struct DuplicateScanBuild {
     pub(in crate::app) token: u64,
     pub(in crate::app) cwd: PathBuf,
     pub(in crate::app) show_hidden: bool,
-    pub(in crate::app) fingerprint: crate::fs::DirectoryFingerprint,
     pub(in crate::app) result: Result<DuplicateScanResult, String>,
 }
 
@@ -84,7 +83,6 @@ pub(in crate::app) struct DuplicateScanBatchBuild {
     pub(in crate::app) token: u64,
     pub(in crate::app) cwd: PathBuf,
     pub(in crate::app) show_hidden: bool,
-    pub(in crate::app) fingerprint: crate::fs::DirectoryFingerprint,
     pub(in crate::app) batch: DuplicateScanBatch,
 }
 
@@ -93,7 +91,6 @@ pub(in crate::app) struct DuplicateScanRequest {
     pub(in crate::app) token: u64,
     pub(in crate::app) cwd: PathBuf,
     pub(in crate::app) show_hidden: bool,
-    pub(in crate::app) fingerprint: crate::fs::DirectoryFingerprint,
 }
 
 #[derive(Debug)]

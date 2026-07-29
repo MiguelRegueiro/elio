@@ -242,7 +242,6 @@ impl App {
                     if build.token != self.jobs.duplicate_token
                         || build.cwd != self.navigation.cwd
                         || build.show_hidden != self.effective_show_hidden()
-                        || build.fingerprint != self.navigation.directory_runtime.fingerprint
                     {
                         continue;
                     }
@@ -253,7 +252,6 @@ impl App {
                     if build.token != self.jobs.duplicate_token
                         || build.cwd != self.navigation.cwd
                         || build.show_hidden != self.effective_show_hidden()
-                        || build.fingerprint != self.navigation.directory_runtime.fingerprint
                     {
                         continue;
                     }

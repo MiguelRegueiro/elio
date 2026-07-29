@@ -2,7 +2,7 @@
 use super::super::state::{BulkRenameEditorSession, PendingTerminalTask};
 use super::super::{
     App,
-    state::{BulkRenameItem, BulkRenameOverlay, DirectoryLoadCompletion},
+    state::{BulkRenameItem, BulkRenameOverlay, DirectoryLoadCompletion, DuplicateFinderOverlay},
 };
 use super::rename;
 #[cfg(unix)]
@@ -592,12 +592,72 @@ fn finish_editor_bulk_rename_opens_confirmation_with_relative_paths() {
     assert_eq!(app.status_message(), "");
     assert!(!temp_file.exists());
 
+    app.overlays.duplicates = Some(DuplicateFinderOverlay {
+        cwd: root.clone(),
+        groups: vec![crate::fs::duplicates::DuplicateGroup {
+            id: 1,
+            size: 5,
+            files: vec![
+                crate::fs::duplicates::DuplicateFile {
+                    path: alpha.clone(),
+                    name: "alpha.txt".to_string(),
+                    relative: "left/alpha.txt".to_string(),
+                    size: 5,
+                    modified: None,
+                },
+                crate::fs::duplicates::DuplicateFile {
+                    path: beta.clone(),
+                    name: "beta.txt".to_string(),
+                    relative: "right/beta.txt".to_string(),
+                    size: 5,
+                    modified: None,
+                },
+            ],
+        }],
+        stats: crate::fs::duplicates::DuplicateScanStats::default(),
+        selected: 0,
+        scroll: 0,
+        selected_paths: [beta.clone()].into_iter().collect(),
+        loading: false,
+        error: None,
+        preview_visible: true,
+        preview_path: Some(alpha.clone()),
+    });
+
     app.confirm_editor_rename()
         .expect("confirmation should rename files");
     assert!(left.join("renamed-alpha.txt").is_file());
     assert!(right.join("renamed-beta.txt").is_file());
     assert!(!alpha.exists());
     assert!(!beta.exists());
+
+    let duplicate_overlay = app
+        .overlays
+        .duplicates
+        .as_ref()
+        .expect("duplicate overlay should stay open");
+    assert_eq!(
+        duplicate_overlay.groups[0].files[0].path,
+        left.join("renamed-alpha.txt")
+    );
+    assert_eq!(
+        duplicate_overlay.groups[0].files[0].name,
+        "renamed-alpha.txt"
+    );
+    assert_eq!(
+        duplicate_overlay.groups[0].files[0].relative,
+        "left/renamed-alpha.txt"
+    );
+    assert!(
+        duplicate_overlay
+            .selected_paths
+            .contains(&right.join("renamed-beta.txt"))
+    );
+    assert!(!duplicate_overlay.selected_paths.contains(&beta));
+    assert_eq!(
+        duplicate_overlay.preview_path,
+        Some(left.join("renamed-alpha.txt"))
+    );
 
     let (status, reselect_path) = take_pending_status(&mut app);
     assert_eq!(status, "Renamed 2 items");

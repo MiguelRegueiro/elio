@@ -22,7 +22,6 @@ impl App {
         self.jobs.duplicate_token = self.jobs.duplicate_token.wrapping_add(1);
         let cwd = self.navigation.cwd.clone();
         let show_hidden = self.effective_show_hidden();
-        let fingerprint = self.navigation.directory_runtime.fingerprint;
         self.overlays.duplicates = Some(DuplicateFinderOverlay {
             cwd: cwd.clone(),
             groups: Vec::new(),
@@ -39,7 +38,6 @@ impl App {
             token: self.jobs.duplicate_token,
             cwd,
             show_hidden,
-            fingerprint,
         };
         let submitted = self.jobs.scheduler.submit_duplicate_scan(request);
         if let Some(overlay) = self.overlays.duplicates.as_mut().filter(|_| !submitted) {
@@ -1088,6 +1086,55 @@ mod tests {
             paths,
             vec![PathBuf::from("beta.txt"), PathBuf::from("delta.txt")]
         );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_rename_while_loading_patches_paths_without_restarting_scan() {
+        let root = temp_path("rename-loading-patches-without-restart");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+        let old_token = app.jobs.duplicate_token;
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])];
+        overlay.loading = true;
+        overlay.preview_path = Some(PathBuf::from("alpha.txt"));
+        overlay.selected_paths.insert(PathBuf::from("beta.txt"));
+
+        app.apply_duplicate_rename_pairs(vec![
+            (
+                PathBuf::from("alpha.txt"),
+                PathBuf::from("renamed-alpha.txt"),
+            ),
+            (PathBuf::from("beta.txt"), PathBuf::from("renamed-beta.txt")),
+        ]);
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_ref()
+            .expect("duplicate overlay should stay open");
+        assert_eq!(app.jobs.duplicate_token, old_token);
+        assert!(overlay.loading);
+        assert_eq!(
+            overlay.groups[0].files[0].path,
+            PathBuf::from("renamed-alpha.txt")
+        );
+        assert_eq!(overlay.groups[0].files[0].name, "renamed-alpha.txt");
+        assert!(
+            overlay
+                .selected_paths
+                .contains(&PathBuf::from("renamed-beta.txt"))
+        );
+        assert!(!overlay.selected_paths.contains(&PathBuf::from("beta.txt")));
 
         app.close_duplicate_finder();
         fs::remove_dir_all(root).expect("failed to remove temp root");

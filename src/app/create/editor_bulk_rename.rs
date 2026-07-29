@@ -266,9 +266,14 @@ impl App {
         };
         let last_new_path = applied.last_new_path.clone();
         let status = rename_status(&plan, &applied);
+        let duplicate_rename_pairs = plan
+            .iter()
+            .map(|op| (op.old_path.clone(), op.new_path.clone()))
+            .collect::<Vec<_>>();
 
         self.overlays.editor_rename_confirm = None;
         self.navigation.selected_paths.clear();
+        self.apply_duplicate_rename_pairs(duplicate_rename_pairs);
         self.queue_directory_load(PendingDirectoryLoad {
             token: 0,
             target_cwd: reload_cwd,

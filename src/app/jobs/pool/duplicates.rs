@@ -37,7 +37,6 @@ struct ActiveDuplicateJob {
 pub(in crate::app::jobs) struct DuplicateJobKey {
     pub(in crate::app::jobs) cwd: PathBuf,
     pub(in crate::app::jobs) show_hidden: bool,
-    pub(in crate::app::jobs) fingerprint: crate::fs::DirectoryFingerprint,
 }
 
 impl DuplicatePool {
@@ -65,7 +64,6 @@ impl DuplicatePool {
                     let progress_token = request.token;
                     let progress_cwd = request.cwd.clone();
                     let progress_show_hidden = request.show_hidden;
-                    let progress_fingerprint = request.fingerprint;
                     let mut progress_send_failed = false;
                     let result = {
                         let mut hash_cache = lock_unpoison(&shared.hash_cache);
@@ -80,7 +78,6 @@ impl DuplicatePool {
                                         token: progress_token,
                                         cwd: progress_cwd.clone(),
                                         show_hidden: progress_show_hidden,
-                                        fingerprint: progress_fingerprint,
                                         batch,
                                     }))
                                     .is_err()
@@ -102,7 +99,6 @@ impl DuplicatePool {
                             token: request.token,
                             cwd: request.cwd,
                             show_hidden: request.show_hidden,
-                            fingerprint: request.fingerprint,
                             result,
                         }))
                         .is_err()
@@ -203,7 +199,6 @@ impl DuplicateJobKey {
         Self {
             cwd: request.cwd.clone(),
             show_hidden: request.show_hidden,
-            fingerprint: request.fingerprint,
         }
     }
 }
