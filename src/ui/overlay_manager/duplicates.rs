@@ -102,11 +102,12 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
         format!("error: {error}")
     } else if app.duplicate_loading() {
         format!(
-            "{}…  •  {} files  •  {} candidates  •  {} hashed  •  {} groups  •  {} reclaimable",
+            "{}…  •  {} files  •  {} candidates  •  {} hashed  •  {} read  •  {} groups  •  {} reclaimable",
             stats.phase.label(),
             stats.scanned_files,
             stats.candidate_files,
             stats.hashed_files,
+            crate::fs::format_size(stats.processed_bytes),
             app.duplicate_group_count(),
             crate::fs::format_size(stats.duplicate_bytes),
         )
