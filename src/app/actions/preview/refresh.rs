@@ -14,11 +14,7 @@ impl App {
             self.clear_preview_directory_stats();
             return;
         }
-        let Some(entry) = self
-            .selected_entry()
-            .cloned()
-            .filter(|entry| entry.is_dir())
-        else {
+        let Some(entry) = self.active_preview_entry().filter(|entry| entry.is_dir()) else {
             self.clear_preview_directory_stats();
             return;
         };
@@ -43,7 +39,9 @@ impl App {
 
     fn schedule_current_directory_stats(&mut self) {
         if self.preview.state.content.kind != PreviewKind::Directory
-            || self.selected_entry().is_none_or(|entry| !entry.is_dir())
+            || self
+                .active_preview_entry()
+                .is_none_or(|entry| !entry.is_dir())
         {
             self.clear_preview_directory_stats();
             return;
@@ -60,7 +58,7 @@ impl App {
         path: &std::path::Path,
         result: crate::fs::DirectoryStatsScanResult,
     ) -> bool {
-        let Some(current_entry) = self.selected_entry() else {
+        let Some(current_entry) = self.active_preview_entry() else {
             return false;
         };
         if self.preview.state.content.kind != PreviewKind::Directory
@@ -115,7 +113,7 @@ impl App {
         self.sync_image_preview_selection_activation();
         self.preview.state.token = self.preview.state.token.wrapping_add(1);
         let preview_options = self.current_preview_request_options();
-        self.preview.state.content = match self.selected_entry().cloned() {
+        self.preview.state.content = match self.active_preview_entry() {
             Some(entry) if self.should_defer_static_image_preview(&entry) => {
                 self.preview.state.load_state = None;
                 PreviewContent::new(PreviewKind::Image, Vec::new()).with_detail(
@@ -267,7 +265,7 @@ impl App {
         };
         self.preview.state.pending_line_counts.remove(&key);
         let Some(total_lines) = total_lines else {
-            let should_clear_pending = self.selected_entry().is_some_and(|entry| {
+            let should_clear_pending = self.active_preview_entry().is_some_and(|entry| {
                 entry.path == key.path && entry.size == key.size && entry.modified == key.modified
             });
             if should_clear_pending {
@@ -281,7 +279,7 @@ impl App {
         };
         self.cache_preview_line_count(key.path.clone(), key.size, key.modified, total_lines);
 
-        let is_current_entry = self.selected_entry().is_some_and(|entry| {
+        let is_current_entry = self.active_preview_entry().is_some_and(|entry| {
             entry.path == key.path && entry.size == key.size && entry.modified == key.modified
         });
         if is_current_entry {
@@ -296,7 +294,7 @@ impl App {
 
     pub(in crate::app) fn sync_current_preview_line_count(&mut self) {
         let needs_total_line_count = self.preview.state.content.needs_total_line_count();
-        let Some(entry) = self.selected_entry().cloned() else {
+        let Some(entry) = self.active_preview_entry() else {
             return;
         };
         if !needs_total_line_count {

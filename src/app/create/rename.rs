@@ -242,6 +242,9 @@ impl App {
             self.overlays.rename = None;
             return Ok(());
         }
+        if self.duplicates_is_open() {
+            return self.confirm_duplicate_rename(original_name, new_name);
+        }
         let new_path = self.navigation.cwd.join(&new_name);
         if new_path.exists() {
             if let Some(r) = &mut self.overlays.rename {

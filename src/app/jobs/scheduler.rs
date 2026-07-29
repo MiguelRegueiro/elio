@@ -1,10 +1,5 @@
-#[cfg(test)]
 use super::{
-    pool::{preview::PreviewJobKey, search::SearchJobKey},
-    tasks::{image::ImagePrepareJobKey, pdf_probe::PdfProbeJobKey, pdf_render::PdfRenderJobKey},
-};
-use super::{
-    pool::{preview::PreviewPool, search::SearchPool},
+    pool::{duplicates::DuplicatePool, preview::PreviewPool, search::SearchPool},
     tasks::{
         archive_create::ArchiveCreatePool, archive_extract::ArchiveExtractPool,
         directory::DirectoryPool, directory_fingerprint::DirectoryFingerprintPool,
@@ -13,6 +8,11 @@ use super::{
         pdf_probe::PdfProbePool, pdf_render::PdfRenderPool, restore::RestorePool, trash::TrashPool,
     },
     *,
+};
+#[cfg(test)]
+use super::{
+    pool::{preview::PreviewJobKey, search::SearchJobKey},
+    tasks::{image::ImagePrepareJobKey, pdf_probe::PdfProbeJobKey, pdf_render::PdfRenderJobKey},
 };
 use std::{
     collections::VecDeque,
@@ -37,6 +37,7 @@ pub(in crate::app) struct JobScheduler {
     pdf_probe: PdfProbePool,
     pdf_render: PdfRenderPool,
     search: SearchPool,
+    duplicates: DuplicatePool,
     preview: PreviewPool,
     result_rx: mpsc::Receiver<JobResult>,
     buffered_results: Mutex<VecDeque<JobResult>>,
@@ -102,6 +103,7 @@ impl JobScheduler {
                 result_tx.clone(),
                 Arc::clone(&metrics),
             ),
+            duplicates: DuplicatePool::new(1, result_tx.clone()),
             preview: PreviewPool::new(
                 config.preview_worker_count,
                 config.preview_queue_limit,
@@ -264,6 +266,14 @@ impl JobScheduler {
         self.search.cancel_all();
     }
 
+    pub(in crate::app) fn submit_duplicate_scan(&self, request: DuplicateScanRequest) -> bool {
+        self.duplicates.submit(request)
+    }
+
+    pub(in crate::app) fn cancel_duplicate_scan(&self) {
+        self.duplicates.cancel_all();
+    }
+
     pub(in crate::app) fn submit_preview(&self, request: PreviewRequest) -> bool {
         self.preview.submit(request)
     }
@@ -296,6 +306,7 @@ impl JobScheduler {
             || self.pdf_probe.has_pending_work()
             || self.pdf_render.has_pending_work()
             || self.search.has_pending_work()
+            || self.duplicates.has_pending_work()
             || self.preview.has_pending_work()
     }
 

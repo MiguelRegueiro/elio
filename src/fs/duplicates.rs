@@ -1,0 +1,495 @@
+use anyhow::{Context, Result};
+use std::{
+    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
+    fs::{self, File},
+    hash::{Hash, Hasher},
+    io::{BufReader, Read},
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+const DUPLICATE_NODE_VISIT_LIMIT: usize = 5_000_000;
+const HASH_CHUNK_SIZE: usize = 1024 * 1024;
+const PARTIAL_CHUNK_SIZE: usize = 64 * 1024;
+const SCAN_YIELD_NODES: usize = 128;
+const SCAN_SLEEP_NODES: usize = 2_048;
+const HASH_YIELD_CHUNKS: usize = 4;
+const HASH_SLEEP_CHUNKS: usize = 16;
+const DUPLICATE_BATCH_GROUP_SIZE: usize = 128;
+const DUPLICATE_BATCH_MAX_LATENCY: Duration = Duration::from_millis(120);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DuplicateFile {
+    pub path: PathBuf,
+    pub name: String,
+    pub relative: String,
+    pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DuplicateGroup {
+    pub id: u64,
+    pub size: u64,
+    pub files: Vec<DuplicateFile>,
+}
+
+impl DuplicateGroup {
+    pub(crate) fn duplicate_bytes(&self) -> u64 {
+        self.size
+            .saturating_mul(self.files.len().saturating_sub(1) as u64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DuplicateScanStats {
+    pub(crate) visited_nodes: usize,
+    pub(crate) scanned_files: usize,
+    pub(crate) candidate_files: usize,
+    pub(crate) groups: usize,
+    pub(crate) duplicate_bytes: u64,
+    pub(crate) node_limit_reached: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DuplicateScanBatch {
+    pub(crate) groups: Vec<DuplicateGroup>,
+    pub(crate) stats: DuplicateScanStats,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DuplicateScanResult {
+    pub(crate) groups: Vec<DuplicateGroup>,
+    pub(crate) stats: DuplicateScanStats,
+}
+
+#[derive(Clone, Debug)]
+struct CandidateFile {
+    path: PathBuf,
+    name: String,
+    relative: String,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+pub(crate) fn scan_duplicates_streaming(
+    cwd: &Path,
+    show_hidden: bool,
+    is_canceled: impl Fn() -> bool,
+    mut emit_batch: impl FnMut(DuplicateScanBatch) -> bool,
+) -> Result<DuplicateScanResult> {
+    let (size_groups, mut stats) = collect_size_candidates(cwd, show_hidden, &is_canceled)?;
+    let mut groups = Vec::new();
+    let mut next_id = 1u64;
+    let mut batch_emitter = DuplicateBatchEmitter::new(&mut emit_batch);
+
+    for candidates in size_groups.into_values() {
+        if is_canceled() {
+            break;
+        }
+        if candidates.len() < 2 {
+            continue;
+        }
+        stats.candidate_files += candidates.len();
+        let verified = verified_groups_for_same_size(candidates, &is_canceled)?;
+        for files in verified {
+            if files.len() < 2 {
+                continue;
+            }
+            let size = files[0].size;
+            let group = DuplicateGroup {
+                id: next_id,
+                size,
+                files,
+            };
+            next_id = next_id.wrapping_add(1);
+            stats.groups += 1;
+            stats.duplicate_bytes = stats
+                .duplicate_bytes
+                .saturating_add(group.duplicate_bytes());
+            if !batch_emitter.push(group.clone(), stats) {
+                groups.push(group);
+                groups.sort_by(compare_groups);
+                return Ok(DuplicateScanResult { groups, stats });
+            }
+            groups.push(group);
+        }
+    }
+    let _ = batch_emitter.flush(stats);
+    groups.sort_by(compare_groups);
+    Ok(DuplicateScanResult { groups, stats })
+}
+
+struct DuplicateBatchEmitter<'a, F>
+where
+    F: FnMut(DuplicateScanBatch) -> bool,
+{
+    pending: Vec<DuplicateGroup>,
+    last_emit: Instant,
+    emit_batch: &'a mut F,
+}
+
+impl<'a, F> DuplicateBatchEmitter<'a, F>
+where
+    F: FnMut(DuplicateScanBatch) -> bool,
+{
+    fn new(emit_batch: &'a mut F) -> Self {
+        Self {
+            pending: Vec::with_capacity(DUPLICATE_BATCH_GROUP_SIZE),
+            last_emit: Instant::now(),
+            emit_batch,
+        }
+    }
+
+    fn push(&mut self, group: DuplicateGroup, stats: DuplicateScanStats) -> bool {
+        self.pending.push(group);
+        if self.pending.len() >= DUPLICATE_BATCH_GROUP_SIZE
+            || self.last_emit.elapsed() >= DUPLICATE_BATCH_MAX_LATENCY
+        {
+            return self.flush(stats);
+        }
+        true
+    }
+
+    fn flush(&mut self, stats: DuplicateScanStats) -> bool {
+        if self.pending.is_empty() {
+            return true;
+        }
+        let mut groups = std::mem::replace(
+            &mut self.pending,
+            Vec::with_capacity(DUPLICATE_BATCH_GROUP_SIZE),
+        );
+        groups.sort_by(compare_groups);
+        self.last_emit = Instant::now();
+        (self.emit_batch)(DuplicateScanBatch { groups, stats })
+    }
+}
+
+fn collect_size_candidates(
+    cwd: &Path,
+    show_hidden: bool,
+    is_canceled: &impl Fn() -> bool,
+) -> Result<(HashMap<u64, Vec<CandidateFile>>, DuplicateScanStats)> {
+    let mut queue = VecDeque::from([cwd.to_path_buf()]);
+    let mut stats = DuplicateScanStats::default();
+    let mut size_groups: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
+
+    while let Some(dir) = queue.pop_front() {
+        if is_canceled() {
+            break;
+        }
+        if stats.visited_nodes >= DUPLICATE_NODE_VISIT_LIMIT {
+            stats.node_limit_reached = true;
+            break;
+        }
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(read_dir) => read_dir,
+            Err(error) if dir == cwd => {
+                return Err(error).with_context(|| format!("failed to read {}", cwd.display()));
+            }
+            Err(_) => continue,
+        };
+        let mut nodes = Vec::new();
+        for entry in read_dir {
+            if is_canceled() || stats.visited_nodes >= DUPLICATE_NODE_VISIT_LIMIT {
+                stats.node_limit_reached |= stats.visited_nodes >= DUPLICATE_NODE_VISIT_LIMIT;
+                break;
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            if !show_hidden && super::is_hidden_entry(&entry) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let name_key = name.to_lowercase();
+            stats.visited_nodes += 1;
+            breathe_after_node(stats.visited_nodes);
+            if file_type.is_dir() {
+                if !should_prune_dir(&name_key) {
+                    nodes.push((name_key, path, true));
+                }
+                continue;
+            }
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let size = metadata.len();
+            if size == 0 {
+                continue;
+            }
+            stats.scanned_files += 1;
+            let Ok(relative_path) = path.strip_prefix(cwd) else {
+                continue;
+            };
+            let relative = relative_path.to_string_lossy().replace('\\', "/");
+            size_groups.entry(size).or_default().push(CandidateFile {
+                path,
+                name,
+                relative,
+                size,
+                modified: metadata.modified().ok(),
+            });
+        }
+        nodes.sort_by(|a, b| super::natural_cmp(&a.0, &b.0));
+        for (_, path, is_dir) in nodes {
+            if is_dir {
+                queue.push_back(path);
+            }
+        }
+    }
+    size_groups.retain(|_, files| files.len() > 1);
+    Ok((size_groups, stats))
+}
+
+fn verified_groups_for_same_size(
+    candidates: Vec<CandidateFile>,
+    is_canceled: &impl Fn() -> bool,
+) -> Result<Vec<Vec<DuplicateFile>>> {
+    let candidates = partial_duplicate_candidates(candidates, is_canceled);
+    let mut by_hash: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
+    for candidate in candidates {
+        if is_canceled() {
+            break;
+        }
+        if let Ok(hash) = content_hash(&candidate.path) {
+            by_hash.entry(hash).or_default().push(candidate);
+        }
+    }
+    let mut groups = Vec::new();
+    for same_hash in by_hash.into_values().filter(|files| files.len() > 1) {
+        let mut representatives: Vec<Vec<CandidateFile>> = Vec::new();
+        'candidate: for candidate in same_hash {
+            if is_canceled() {
+                break;
+            }
+            for group in &mut representatives {
+                if files_equal(&candidate.path, &group[0].path).unwrap_or(false) {
+                    group.push(candidate);
+                    continue 'candidate;
+                }
+            }
+            representatives.push(vec![candidate]);
+        }
+        for group in representatives.into_iter().filter(|g| g.len() > 1) {
+            let mut files = group
+                .into_iter()
+                .map(|file| DuplicateFile {
+                    path: file.path,
+                    name: file.name,
+                    relative: file.relative,
+                    size: file.size,
+                    modified: file.modified,
+                })
+                .collect::<Vec<_>>();
+            files.sort_by(|a, b| {
+                super::natural_cmp(&a.relative.to_lowercase(), &b.relative.to_lowercase())
+                    .then_with(|| a.relative.cmp(&b.relative))
+            });
+            groups.push(files);
+        }
+    }
+    Ok(groups)
+}
+
+fn partial_duplicate_candidates(
+    candidates: Vec<CandidateFile>,
+    is_canceled: &impl Fn() -> bool,
+) -> Vec<CandidateFile> {
+    let mut by_partial: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if is_canceled() {
+            break;
+        }
+        breathe_after_node(index + 1);
+        if let Ok(fingerprint) = partial_content_fingerprint(&candidate.path, candidate.size) {
+            by_partial.entry(fingerprint).or_default().push(candidate);
+        }
+    }
+    by_partial
+        .into_values()
+        .filter(|files| files.len() > 1)
+        .flatten()
+        .collect()
+}
+
+fn partial_content_fingerprint(path: &Path, size: u64) -> Result<u64> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = DefaultHasher::new();
+    size.hash(&mut hasher);
+
+    let mut first = vec![0u8; PARTIAL_CHUNK_SIZE.min(size as usize)];
+    let first_read = file.read(&mut first)?;
+    first[..first_read].hash(&mut hasher);
+
+    if size > PARTIAL_CHUNK_SIZE as u64 {
+        use std::io::{Seek, SeekFrom};
+        file.seek(SeekFrom::Start(
+            size.saturating_sub(PARTIAL_CHUNK_SIZE as u64),
+        ))?;
+        let mut last = vec![0u8; PARTIAL_CHUNK_SIZE];
+        let last_read = file.read(&mut last)?;
+        last[..last_read].hash(&mut hasher);
+    }
+
+    Ok(hasher.finish())
+}
+
+fn content_hash(path: &Path) -> Result<u64> {
+    let mut reader = BufReader::new(
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
+    );
+    let mut hasher = DefaultHasher::new();
+    let mut buffer = vec![0u8; HASH_CHUNK_SIZE];
+    let mut chunks = 0usize;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        buffer[..read].hash(&mut hasher);
+        chunks += 1;
+        breathe_after_hash_chunk(chunks);
+    }
+    Ok(hasher.finish())
+}
+
+fn files_equal(left: &Path, right: &Path) -> Result<bool> {
+    let mut left = BufReader::new(File::open(left)?);
+    let mut right = BufReader::new(File::open(right)?);
+    let mut left_buf = vec![0u8; HASH_CHUNK_SIZE];
+    let mut right_buf = vec![0u8; HASH_CHUNK_SIZE];
+    let mut chunks = 0usize;
+    loop {
+        let left_read = left.read(&mut left_buf)?;
+        let right_read = right.read(&mut right_buf)?;
+        if left_read != right_read {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+        if left_buf[..left_read] != right_buf[..right_read] {
+            return Ok(false);
+        }
+        chunks += 1;
+        breathe_after_hash_chunk(chunks);
+    }
+}
+
+fn breathe_after_node(count: usize) {
+    if count.is_multiple_of(SCAN_SLEEP_NODES) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    } else if count.is_multiple_of(SCAN_YIELD_NODES) {
+        std::thread::yield_now();
+    }
+}
+
+fn breathe_after_hash_chunk(chunks: usize) {
+    if chunks.is_multiple_of(HASH_SLEEP_CHUNKS) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    } else if chunks.is_multiple_of(HASH_YIELD_CHUNKS) {
+        std::thread::yield_now();
+    }
+}
+
+fn compare_groups(left: &DuplicateGroup, right: &DuplicateGroup) -> std::cmp::Ordering {
+    right
+        .duplicate_bytes()
+        .cmp(&left.duplicate_bytes())
+        .then_with(|| right.size.cmp(&left.size))
+        .then_with(|| {
+            left.files
+                .first()
+                .map(|f| &f.relative)
+                .cmp(&right.files.first().map(|f| &f.relative))
+        })
+}
+
+fn should_prune_dir(name_key: &str) -> bool {
+    matches!(name_key, ".git" | "node_modules" | "target")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "elio-duplicates-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn scan_groups_exact_duplicate_files_by_content_not_name() {
+        let root = temp_path("exact");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("a.txt"), b"same").unwrap();
+        fs::write(root.join("nested/renamed.bin"), b"same").unwrap();
+        fs::write(root.join("different.txt"), b"diff").unwrap();
+
+        let result = scan_duplicates_streaming(&root, true, || false, |_| true).unwrap();
+
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.groups[0].files.len(), 2);
+        assert_eq!(result.groups[0].duplicate_bytes(), 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_coalesces_small_duplicate_batches() {
+        let root = temp_path("coalesced-batches");
+        fs::create_dir_all(&root).unwrap();
+        for (left, right, content) in [
+            ("a1.txt", "a2.txt", b"aa".as_slice()),
+            ("b1.txt", "b2.txt", b"bbb".as_slice()),
+            ("c1.txt", "c2.txt", b"cccc".as_slice()),
+        ] {
+            fs::write(root.join(left), content).unwrap();
+            fs::write(root.join(right), content).unwrap();
+        }
+
+        let mut batches = Vec::new();
+        let result = scan_duplicates_streaming(
+            &root,
+            true,
+            || false,
+            |batch| {
+                batches.push(batch);
+                true
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.groups.len(), 3);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].groups.len(), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_ignores_zero_byte_files() {
+        let root = temp_path("zero");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a"), b"").unwrap();
+        fs::write(root.join("b"), b"").unwrap();
+
+        let result = scan_duplicates_streaming(&root, true, || false, |_| true).unwrap();
+
+        assert!(result.groups.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+}

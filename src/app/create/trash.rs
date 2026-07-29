@@ -90,9 +90,26 @@ impl App {
         self.open_trash_prompt_for_targets(targets, true);
     }
 
+    pub(in crate::app) fn open_trash_prompt_for_explicit_targets(
+        &mut self,
+        targets: Vec<TrashTarget>,
+        permanent: bool,
+    ) {
+        self.overlays.help = false;
+        self.overlays.search = None;
+        self.overlays.create = None;
+        self.overlays.trash = Some(TrashOverlay {
+            targets,
+            scroll: 0,
+            confirmed: true,
+            permanent,
+        });
+    }
+
     fn open_trash_prompt_for_targets(&mut self, targets: Vec<TrashTarget>, permanent: bool) {
         self.overlays.help = false;
         self.overlays.search = None;
+        self.overlays.duplicates = None;
         self.overlays.create = None;
         self.overlays.trash = Some(TrashOverlay {
             targets,
@@ -333,10 +350,14 @@ impl App {
         let Some(t) = self.overlays.trash.take() else {
             return Ok(());
         };
+        let had_duplicate_overlay = self.overlays.duplicates.is_some();
         if t.targets.is_empty() {
             return Ok(());
         }
         self.navigation.selected_paths.clear();
+        if had_duplicate_overlay {
+            self.overlays.duplicates = None;
+        }
         let target_paths: Vec<PathBuf> =
             t.targets.iter().map(|target| target.path.clone()).collect();
         let source_cwd = self.queue_directory_escape_for_paths(&target_paths)?;

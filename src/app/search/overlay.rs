@@ -405,7 +405,7 @@ impl App {
         previous != search.scroll
     }
 
-    fn reveal_path(&mut self, path: PathBuf) -> Result<()> {
+    pub(in crate::app) fn reveal_path(&mut self, path: PathBuf) -> Result<()> {
         if path.is_dir() {
             return self.set_dir_transition(
                 path,

@@ -89,6 +89,24 @@ pub fn render(frame: &mut Frame<'_>, app: &App, state: &mut FrameState) {
         chrome::render_status(frame, rows[1], app, palette);
     }
 
+    if app.duplicates_is_open() {
+        let duplicate_area = ratatui::layout::Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        overlay_manager::render_duplicate_overlay(frame, duplicate_area, app, state, palette);
+        chrome::render_status(
+            frame,
+            ratatui::layout::Rect {
+                y: area.y + area.height.saturating_sub(1),
+                height: area.height.min(1),
+                ..area
+            },
+            app,
+            palette,
+        );
+    }
+
     if app.trash_is_open() {
         overlay_manager::render_trash_overlay(frame, area, app, state, palette);
     } else if app.restore_is_open() {

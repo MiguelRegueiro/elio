@@ -55,12 +55,16 @@ impl App {
             .contains(&StaticImageKey::from_request(&request))
     }
 
+    pub(in crate::app) fn preview_surface_visible_for_images(&self) -> bool {
+        self.preview.visible || self.duplicate_preview_rendered()
+    }
+
     pub(crate) fn preview_will_use_static_image_surface_after_layout(&self) -> bool {
-        self.preview.visible
+        self.preview_surface_visible_for_images()
             && self.terminal_image_overlay_available()
             && self
-                .selected_entry()
-                .is_some_and(|entry| static_image_detail_label(entry).is_some())
+                .active_preview_entry()
+                .is_some_and(|entry| static_image_detail_label(&entry).is_some())
     }
 
     pub(in crate::app) fn static_image_preview_header_detail(&self) -> Option<String> {
@@ -112,13 +116,13 @@ impl App {
     pub(in crate::app) fn active_static_image_overlay_request(
         &self,
     ) -> Option<StaticImageOverlayRequest> {
-        let entry = self.selected_entry()?;
-        self.static_image_overlay_request_for_entry(entry)
+        let entry = self.active_preview_entry()?;
+        self.static_image_overlay_request_for_entry(&entry)
     }
 
     pub(in crate::app) fn clear_failed_static_image_state_if_needed(&mut self) {
-        if let Some(entry) = self.selected_entry()
-            && static_image_detail_label(entry).is_none()
+        if let Some(entry) = self.active_preview_entry()
+            && static_image_detail_label(&entry).is_none()
         {
             self.preview.image.failed_images.clear();
         }
@@ -133,6 +137,10 @@ impl App {
                     + self.preview.image.selection_activation_delay;
                 (Instant::now() < ready_at).then_some(ready_at)
             });
+    }
+
+    pub(in crate::app) fn clear_image_preview_selection_activation(&mut self) {
+        self.preview.image.activation_ready_at = None;
     }
 
     pub(in crate::app) fn mark_static_image_failed(&mut self, request: &StaticImageOverlayRequest) {
@@ -311,7 +319,7 @@ impl App {
         &self,
         entry: &Entry,
     ) -> Option<StaticImageOverlayRequest> {
-        if !self.preview.visible || !self.terminal_image_overlay_available() {
+        if !self.preview_surface_visible_for_images() || !self.terminal_image_overlay_available() {
             return None;
         }
         static_image_detail_label(entry)?;

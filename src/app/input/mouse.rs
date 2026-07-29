@@ -48,25 +48,16 @@ impl App {
             return self.handle_open_with_mouse(mouse);
         }
 
-        if self.overlays.search.is_some() {
-            return self.handle_search_mouse(mouse);
+        if self.overlays.help {
+            return self.handle_help_mouse(mouse);
         }
 
-        if self.overlays.help {
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.clear_wheel_scroll();
-                    self.overlays.help = false;
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_help_by(HELP_WHEEL_LINES);
-                }
-                MouseEventKind::ScrollUp => {
-                    self.scroll_help_by(-HELP_WHEEL_LINES);
-                }
-                _ => {}
-            }
-            return Ok(());
+        if self.overlays.duplicates.is_some() {
+            return self.handle_duplicate_mouse(mouse);
+        }
+
+        if self.overlays.search.is_some() {
+            return self.handle_search_mouse(mouse);
         }
 
         if self.preview_fullscreen() {
@@ -181,6 +172,23 @@ impl App {
                 // are inaccurate (observed in some Alacritty/Ghostty configurations).
                 self.input.hover_panel = self.panel_target_at(mouse.column, mouse.row);
                 self.update_wheel_target_from_position(mouse.column, mouse.row);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_help_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.clear_wheel_scroll();
+                self.overlays.help = false;
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_help_by(HELP_WHEEL_LINES);
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_help_by(-HELP_WHEEL_LINES);
             }
             _ => {}
         }

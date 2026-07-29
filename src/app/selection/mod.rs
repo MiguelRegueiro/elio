@@ -7,6 +7,9 @@ impl App {
     }
 
     pub fn selection_count(&self) -> usize {
+        if let Some(overlay) = &self.overlays.duplicates {
+            return overlay.selected_paths.len();
+        }
         self.navigation.selected_paths.len()
     }
 

@@ -238,6 +238,28 @@ impl App {
                         }
                     }
                 }
+                JobResult::DuplicateScanBatch(build) => {
+                    if build.token != self.jobs.duplicate_token
+                        || build.cwd != self.navigation.cwd
+                        || build.show_hidden != self.effective_show_hidden()
+                        || build.fingerprint != self.navigation.directory_runtime.fingerprint
+                    {
+                        continue;
+                    }
+                    self.apply_duplicate_batch(build.batch);
+                    dirty = true;
+                }
+                JobResult::DuplicateScan(build) => {
+                    if build.token != self.jobs.duplicate_token
+                        || build.cwd != self.navigation.cwd
+                        || build.show_hidden != self.effective_show_hidden()
+                        || build.fingerprint != self.navigation.directory_runtime.fingerprint
+                    {
+                        continue;
+                    }
+                    self.apply_duplicate_result(build.result);
+                    dirty = true;
+                }
                 JobResult::ArchiveCreate(build) => {
                     if build.token != self.jobs.archive_create_token {
                         continue;
@@ -527,7 +549,7 @@ impl App {
                         .as_ref()
                         .map(|visual| visual.kind);
                     let is_current_entry = self
-                        .selected_entry()
+                        .active_preview_entry()
                         .map(|entry| {
                             entry.path == build.entry.path
                                 && entry.modified == build.entry.modified

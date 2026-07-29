@@ -60,6 +60,15 @@ impl App {
             return;
         }
 
+        self.open_copy_overlay_for_paths(paths);
+    }
+
+    pub(in crate::app) fn open_copy_overlay_for_paths(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            self.status = "Nothing to copy".to_string();
+            return;
+        }
+
         self.overlays.help = false;
         self.overlays.copy = Some(build_copy_overlay(&self.navigation.cwd, &paths));
         self.status.clear();

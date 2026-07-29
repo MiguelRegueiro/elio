@@ -199,6 +199,33 @@ impl App {
         }
     }
 
+    fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            self.overlays.help = false;
+            return Ok(());
+        }
+        match key.code {
+            KeyCode::Esc => self.overlays.help = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_help_by(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_help_by(1);
+            }
+            KeyCode::PageUp => {
+                self.scroll_help_by(-(self.help_page_step() as isize));
+            }
+            KeyCode::PageDown => {
+                self.scroll_help_by(self.help_page_step() as isize);
+            }
+            KeyCode::Home => self.overlays.help_scroll = 0,
+            KeyCode::End => self.overlays.help_scroll = self.help_scroll_max(),
+            _ if is_help_shortcut(key) => self.overlays.help = false,
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         // The kitty keyboard protocol (enabled when the terminal supports it) emits
         // Press, Repeat, and Release events. Ignore Release so each keystroke is only
@@ -259,6 +286,14 @@ impl App {
             return self.handle_open_with_key(key);
         }
 
+        if self.overlays.help {
+            return self.handle_help_key(key);
+        }
+
+        if self.overlays.duplicates.is_some() {
+            return self.handle_duplicate_key(key);
+        }
+
         if self.overlays.search.is_some() {
             return self.handle_search_key(key);
         }
@@ -268,35 +303,6 @@ impl App {
         }
 
         if self.should_debounce_navigation_key(key) {
-            return Ok(());
-        }
-
-        if self.overlays.help {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char('c'))
-            {
-                self.overlays.help = false;
-                return Ok(());
-            }
-            match key.code {
-                KeyCode::Esc => self.overlays.help = false,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.scroll_help_by(-1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.scroll_help_by(1);
-                }
-                KeyCode::PageUp => {
-                    self.scroll_help_by(-(self.help_page_step() as isize));
-                }
-                KeyCode::PageDown => {
-                    self.scroll_help_by(self.help_page_step() as isize);
-                }
-                KeyCode::Home => self.overlays.help_scroll = 0,
-                KeyCode::End => self.overlays.help_scroll = self.help_scroll_max(),
-                _ if is_help_shortcut(key) => self.overlays.help = false,
-                _ => {}
-            }
             return Ok(());
         }
 
@@ -523,6 +529,7 @@ impl App {
             Action::SearchFolders => self.open_search_with_status(SearchScope::Folders),
             Action::SearchFiles => self.open_search_with_status(SearchScope::Files),
             Action::FilterDirectory => self.open_local_filter(),
+            Action::FindDuplicates => self.open_duplicate_finder(),
             Action::Zoxide => {
                 self.pending_terminal_task = Some(PendingTerminalTask::Zoxide);
                 self.status.clear();
@@ -745,6 +752,7 @@ fn fullscreen_preview_exits_then_dispatches(action: crate::config::Action) -> bo
             | Action::SearchFolders
             | Action::SearchFiles
             | Action::FilterDirectory
+            | Action::FindDuplicates
             | Action::GoTo
             | Action::OpenWith
             | Action::Open

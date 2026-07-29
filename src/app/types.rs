@@ -35,6 +35,7 @@ pub struct FrameState {
     pub sidebar_hits: Vec<PathHit>,
     pub entry_hits: Vec<EntryHit>,
     pub search_hits: Vec<SearchHit>,
+    pub duplicate_hits: Vec<DuplicateHit>,
     pub goto_hits: Vec<GoToHit>,
     pub copy_hits: Vec<CopyHit>,
     pub open_with_hits: Vec<OpenWithHit>,
@@ -60,6 +61,7 @@ pub struct FrameState {
     pub copy_panel: Option<Rect>,
     pub open_with_panel: Option<Rect>,
     pub search_panel: Option<Rect>,
+    pub duplicate_panel: Option<Rect>,
     pub help_panel: Option<Rect>,
     pub help_scroll_max: usize,
     pub help_rows_visible: usize,
@@ -77,6 +79,7 @@ pub struct FrameState {
     pub preview_rows_visible: usize,
     pub preview_cols_visible: usize,
     pub search_rows_visible: usize,
+    pub duplicate_rows_visible: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +96,12 @@ pub struct EntryHit {
 
 #[derive(Clone, Debug)]
 pub struct SearchHit {
+    pub rect: Rect,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct DuplicateHit {
     pub rect: Rect,
     pub index: usize,
 }

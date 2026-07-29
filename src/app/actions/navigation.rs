@@ -5,6 +5,18 @@ use crate::preview::{PreviewContent, PreviewWorkClass, preview_work_class};
 
 impl App {
     pub fn selection_summary(&self) -> String {
+        if let Some(overlay) = &self.overlays.duplicates {
+            return match self.duplicate_focused_entry() {
+                Some(entry) => format!(
+                    "{}/{}  {}",
+                    overlay.selected.saturating_add(1),
+                    self.duplicate_file_count(),
+                    entry.name,
+                ),
+                None => "0/0  Duplicate Finder".to_string(),
+            };
+        }
+
         match self.selected_entry() {
             Some(entry) => {
                 let suffix = if entry.is_dir() { "/" } else { "" };
@@ -573,7 +585,7 @@ impl App {
         Ok(())
     }
 
-    fn open_paths_in_system(&mut self, targets: Vec<PathBuf>) -> Result<()> {
+    pub(in crate::app) fn open_paths_in_system(&mut self, targets: Vec<PathBuf>) -> Result<()> {
         if targets.is_empty() {
             return Ok(());
         }

@@ -14,6 +14,7 @@ use super::{
     types::*,
 };
 use crate::core::{Entry, SidebarRow, SortMode};
+use crate::fs::duplicates::{DuplicateGroup, DuplicateScanStats};
 use crate::fs::search::{SearchCandidate, SearchIndexStats};
 use crate::preview;
 
@@ -258,6 +259,33 @@ pub(super) struct CreateOverlay {
     pub(super) preferred_col: usize,
     /// Per-line validation error; same length as `lines`.
     pub(super) line_errors: Vec<Option<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DuplicateFinderOverlay {
+    pub(super) cwd: PathBuf,
+    pub(super) groups: Vec<DuplicateGroup>,
+    pub(super) stats: DuplicateScanStats,
+    pub(super) selected: usize,
+    pub(super) scroll: usize,
+    pub(super) selected_paths: HashSet<PathBuf>,
+    pub(super) loading: bool,
+    pub(super) error: Option<String>,
+    pub(super) preview_visible: bool,
+    pub(super) preview_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DuplicateRow {
+    pub index: usize,
+    pub group_rank: usize,
+    pub group_first: bool,
+    pub path: PathBuf,
+    pub name: String,
+    pub parent: String,
+    pub size: u64,
+    pub selected: bool,
+    pub focused: bool,
 }
 
 pub(super) struct SearchOverlay {
@@ -713,6 +741,7 @@ pub(crate) struct OverlayState {
     pub(in crate::app) copy: Option<CopyOverlay>,
     pub(in crate::app) open_with: Option<OpenWithOverlay>,
     pub(in crate::app) search: Option<SearchOverlay>,
+    pub(in crate::app) duplicates: Option<DuplicateFinderOverlay>,
     pub(crate) help: bool,
     pub(crate) help_scroll: usize,
 }
@@ -723,6 +752,7 @@ pub(in crate::app) struct JobRuntime {
     pub(in crate::app) search_token: u64,
     pub(in crate::app) search_loading: bool,
     pub(in crate::app) search_cache: Option<SearchCache>,
+    pub(in crate::app) duplicate_token: u64,
     pub(in crate::app) scheduler: JobScheduler,
     pub(in crate::app) clipboard: Option<Clipboard>,
     pub(in crate::app) archive_create_token: u64,
@@ -914,6 +944,7 @@ impl App {
                 search_token: 0,
                 search_loading: false,
                 search_cache: None,
+                duplicate_token: 0,
                 scheduler,
                 clipboard: None,
                 archive_create_token: 0,

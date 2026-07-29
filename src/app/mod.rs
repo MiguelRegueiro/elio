@@ -4,6 +4,7 @@ mod constants;
 mod create;
 mod directory_counts;
 mod drag;
+mod duplicates;
 mod git;
 mod input;
 mod jobs;
@@ -37,7 +38,7 @@ use std::{
 pub use self::state::App;
 #[cfg(test)]
 pub use self::state::PreviewMetricsSnapshot;
-pub(crate) use self::state::{ChooserExit, PendingTerminalTask};
+pub(crate) use self::state::{ChooserExit, DuplicateRow, PendingTerminalTask};
 pub(crate) use crate::core::FileClass;
 pub(crate) use crate::fs::{
     format_item_count, format_size, format_size_parts, format_time_ago, rect_contains,
@@ -46,8 +47,8 @@ pub(crate) use crate::fs::{
 
 pub(crate) use self::types::ClipOp;
 pub use self::types::{
-    CopyHit, EntryHit, FrameState, GoToHit, OpenWithHit, PathHit, SearchHit, SearchRow,
-    SearchScope, ViewMetrics, ViewMode,
+    CopyHit, DuplicateHit, EntryHit, FrameState, GoToHit, OpenWithHit, PathHit, SearchHit,
+    SearchRow, SearchScope, ViewMetrics, ViewMode,
 };
 #[cfg(test)]
 pub use crate::core::SidebarItem;
@@ -55,9 +56,11 @@ pub use crate::core::{Entry, EntryKind, SidebarItemKind, SidebarRow, SortMode};
 
 impl App {
     pub fn set_frame_state(&mut self, mut frame_state: FrameState) -> bool {
-        let previous_code_line_limit = self.selected_entry().map(|entry| {
+        let duplicate_preview_was_rendered =
+            self.overlays.duplicates.is_some() && self.input.frame_state.preview_panel.is_some();
+        let previous_code_line_limit = self.active_preview_entry().map(|entry| {
             self.preview_code_line_limit_for_entry_with_rows(
-                entry,
+                &entry,
                 self.input.frame_state.preview_rows_visible,
             )
         });
@@ -66,9 +69,17 @@ impl App {
         }
         self.input.frame_state = frame_state;
         let mut dirty = self.sync_scroll() | self.sync_search_scroll() | self.sync_preview_scroll();
-        let next_code_line_limit = self.selected_entry().map(|entry| {
+        let duplicate_preview_is_rendered =
+            self.overlays.duplicates.is_some() && self.input.frame_state.preview_panel.is_some();
+        if duplicate_preview_was_rendered && !duplicate_preview_is_rendered {
+            self.queue_terminal_image_geometry_clear();
+            self.clear_image_preview_selection_activation();
+            dirty = true;
+        }
+        dirty |= self.sync_duplicate_scroll();
+        let next_code_line_limit = self.active_preview_entry().map(|entry| {
             self.preview_code_line_limit_for_entry_with_rows(
-                entry,
+                &entry,
                 self.input.frame_state.preview_rows_visible,
             )
         });
