@@ -16,6 +16,7 @@ pub(in crate::app::jobs) struct DuplicatePool {
 
 struct DuplicateShared {
     state: Mutex<DuplicateState>,
+    hash_cache: Mutex<crate::fs::duplicates::DuplicateHashCache>,
     available: Condvar,
 }
 
@@ -51,6 +52,7 @@ impl DuplicatePool {
                 active: None,
                 closed: false,
             }),
+            hash_cache: Mutex::new(crate::fs::duplicates::DuplicateHashCache::default()),
             available: Condvar::new(),
         });
         let mut workers = Vec::with_capacity(worker_count);
@@ -65,27 +67,31 @@ impl DuplicatePool {
                     let progress_show_hidden = request.show_hidden;
                     let progress_fingerprint = request.fingerprint;
                     let mut progress_send_failed = false;
-                    let result = crate::fs::duplicates::scan_duplicates_streaming(
-                        &request.cwd,
-                        request.show_hidden,
-                        || canceled.load(Ordering::Relaxed),
-                        |batch| {
-                            if result_tx
-                                .send(JobResult::DuplicateScanBatch(DuplicateScanBatchBuild {
-                                    token: progress_token,
-                                    cwd: progress_cwd.clone(),
-                                    show_hidden: progress_show_hidden,
-                                    fingerprint: progress_fingerprint,
-                                    batch,
-                                }))
-                                .is_err()
-                            {
-                                progress_send_failed = true;
-                                return false;
-                            }
-                            true
-                        },
-                    )
+                    let result = {
+                        let mut hash_cache = lock_unpoison(&shared.hash_cache);
+                        crate::fs::duplicates::scan_duplicates_streaming_with_cache(
+                            &request.cwd,
+                            request.show_hidden,
+                            &mut hash_cache,
+                            || canceled.load(Ordering::Relaxed),
+                            |batch| {
+                                if result_tx
+                                    .send(JobResult::DuplicateScanBatch(DuplicateScanBatchBuild {
+                                        token: progress_token,
+                                        cwd: progress_cwd.clone(),
+                                        show_hidden: progress_show_hidden,
+                                        fingerprint: progress_fingerprint,
+                                        batch,
+                                    }))
+                                    .is_err()
+                                {
+                                    progress_send_failed = true;
+                                    return false;
+                                }
+                                true
+                            },
+                        )
+                    }
                     .map_err(|error| error.to_string());
                     DuplicateShared::finish(&shared, &key);
                     if progress_send_failed || canceled.load(Ordering::Relaxed) {

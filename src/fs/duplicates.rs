@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File},
@@ -55,7 +57,7 @@ impl DuplicateScanPhase {
         match self {
             Self::Walking => "walking",
             Self::SizeGrouping => "grouping",
-            Self::ContentChecking => "checking contents",
+            Self::ContentChecking => "checking",
             Self::Complete => "complete",
         }
     }
@@ -67,12 +69,45 @@ pub(crate) struct DuplicateScanStats {
     pub(crate) visited_nodes: usize,
     pub(crate) scanned_files: usize,
     pub(crate) candidate_files: usize,
+    pub(crate) checked_candidates: usize,
     pub(crate) hashed_files: usize,
+    pub(crate) cached_hashes: usize,
     pub(crate) processed_bytes: u64,
     pub(crate) verified_files: usize,
     pub(crate) groups: usize,
     pub(crate) duplicate_bytes: u64,
     pub(crate) node_limit_reached: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DuplicateHashCache {
+    hashes: HashMap<DuplicateHashCacheKey, blake3::Hash>,
+}
+
+impl DuplicateHashCache {
+    fn get(&self, key: &DuplicateHashCacheKey) -> Option<blake3::Hash> {
+        self.hashes.get(key).copied()
+    }
+
+    fn insert(&mut self, key: DuplicateHashCacheKey, hash: blake3::Hash) {
+        self.hashes.insert(key, hash);
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct DuplicateHashCacheKey {
+    identity: DuplicateHashCacheIdentity,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+    changed: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum DuplicateHashCacheIdentity {
+    #[cfg(unix)]
+    Unix { dev: u64, ino: u64 },
+    #[cfg(not(unix))]
+    Path(PathBuf),
 }
 
 #[derive(Clone, Debug)]
@@ -94,11 +129,24 @@ struct CandidateFile {
     relative: String,
     size: u64,
     modified: Option<std::time::SystemTime>,
+    cache_key: Option<DuplicateHashCacheKey>,
 }
 
+#[cfg(test)]
 pub(crate) fn scan_duplicates_streaming(
     cwd: &Path,
     show_hidden: bool,
+    is_canceled: impl Fn() -> bool,
+    emit_batch: impl FnMut(DuplicateScanBatch) -> bool,
+) -> Result<DuplicateScanResult> {
+    let mut cache = DuplicateHashCache::default();
+    scan_duplicates_streaming_with_cache(cwd, show_hidden, &mut cache, is_canceled, emit_batch)
+}
+
+pub(crate) fn scan_duplicates_streaming_with_cache(
+    cwd: &Path,
+    show_hidden: bool,
+    cache: &mut DuplicateHashCache,
     is_canceled: impl Fn() -> bool,
     mut emit_batch: impl FnMut(DuplicateScanBatch) -> bool,
 ) -> Result<DuplicateScanResult> {
@@ -128,6 +176,7 @@ pub(crate) fn scan_duplicates_streaming(
         }
         let verified = verified_groups_for_same_size(
             candidates,
+            cache,
             &mut stats,
             &mut batch_emitter,
             &is_canceled,
@@ -288,11 +337,12 @@ fn collect_size_candidates(
             };
             let relative = relative_path.to_string_lossy().replace('\\', "/");
             size_groups.entry(size).or_default().push(CandidateFile {
-                path,
+                path: path.clone(),
                 name,
                 relative,
                 size,
                 modified: metadata.modified().ok(),
+                cache_key: duplicate_hash_cache_key(&path, &metadata),
             });
         }
         nodes.sort_by(|a, b| super::natural_cmp(&a.0, &b.0));
@@ -306,8 +356,57 @@ fn collect_size_candidates(
     Ok((size_groups, stats))
 }
 
+fn duplicate_hash_cache_key(path: &Path, metadata: &fs::Metadata) -> Option<DuplicateHashCacheKey> {
+    let identity = duplicate_hash_cache_identity(path, metadata);
+    Some(DuplicateHashCacheKey {
+        identity,
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+        changed: metadata_changed_time(metadata),
+    })
+}
+
+#[cfg(unix)]
+fn duplicate_hash_cache_identity(
+    _path: &Path,
+    metadata: &fs::Metadata,
+) -> DuplicateHashCacheIdentity {
+    DuplicateHashCacheIdentity::Unix {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    }
+}
+
+#[cfg(not(unix))]
+fn duplicate_hash_cache_identity(
+    path: &Path,
+    _metadata: &fs::Metadata,
+) -> DuplicateHashCacheIdentity {
+    DuplicateHashCacheIdentity::Path(path.to_path_buf())
+}
+
+#[cfg(unix)]
+fn metadata_changed_time(metadata: &fs::Metadata) -> Option<std::time::SystemTime> {
+    let secs = metadata.ctime();
+    let nanos = metadata.ctime_nsec();
+    if secs < 0 || nanos < 0 {
+        return None;
+    }
+    Some(
+        std::time::UNIX_EPOCH
+            + Duration::from_secs(secs as u64)
+            + Duration::from_nanos(nanos as u64),
+    )
+}
+
+#[cfg(not(unix))]
+fn metadata_changed_time(_metadata: &fs::Metadata) -> Option<std::time::SystemTime> {
+    None
+}
+
 fn verified_groups_for_same_size<F>(
     candidates: Vec<CandidateFile>,
+    cache: &mut DuplicateHashCache,
     stats: &mut DuplicateScanStats,
     batch_emitter: &mut DuplicateBatchEmitter<'_, F>,
     is_canceled: &impl Fn() -> bool,
@@ -321,7 +420,7 @@ where
     {
         candidates
     } else {
-        partial_duplicate_candidates(candidates, is_canceled)
+        partial_duplicate_candidates(candidates, stats, is_canceled)
     };
 
     let mut by_hash: HashMap<blake3::Hash, Vec<CandidateFile>> = HashMap::new();
@@ -329,13 +428,16 @@ where
         if is_canceled() {
             break;
         }
-        match content_hash(&candidate.path, stats, batch_emitter, is_canceled) {
+        match content_hash(&candidate, cache, stats, batch_emitter, is_canceled) {
             Ok(Some(hash)) => {
+                stats.checked_candidates += 1;
                 stats.hashed_files += 1;
                 by_hash.entry(hash).or_default().push(candidate);
             }
             Ok(None) => break,
-            Err(_) => {}
+            Err(_) => {
+                stats.checked_candidates += 1;
+            }
         }
     }
 
@@ -378,23 +480,30 @@ where
 
 fn partial_duplicate_candidates(
     candidates: Vec<CandidateFile>,
+    stats: &mut DuplicateScanStats,
     is_canceled: &impl Fn() -> bool,
 ) -> Vec<CandidateFile> {
     let mut by_partial: HashMap<blake3::Hash, Vec<CandidateFile>> = HashMap::new();
+    let mut processed = 0usize;
     for (index, candidate) in candidates.into_iter().enumerate() {
         if is_canceled() {
             break;
         }
+        processed += 1;
         breathe_after_node(index + 1);
         if let Ok(fingerprint) = partial_content_fingerprint(&candidate.path, candidate.size) {
             by_partial.entry(fingerprint).or_default().push(candidate);
         }
     }
-    by_partial
+    let survivors = by_partial
         .into_values()
         .filter(|files| files.len() > 1)
         .flatten()
-        .collect()
+        .collect::<Vec<_>>();
+    stats.checked_candidates = stats
+        .checked_candidates
+        .saturating_add(processed.saturating_sub(survivors.len()));
+    survivors
 }
 
 fn partial_content_fingerprint(path: &Path, size: u64) -> Result<blake3::Hash> {
@@ -421,6 +530,32 @@ fn partial_content_fingerprint(path: &Path, size: u64) -> Result<blake3::Hash> {
 }
 
 fn content_hash<F>(
+    candidate: &CandidateFile,
+    cache: &mut DuplicateHashCache,
+    stats: &mut DuplicateScanStats,
+    batch_emitter: &mut DuplicateBatchEmitter<'_, F>,
+    is_canceled: &impl Fn() -> bool,
+) -> Result<Option<blake3::Hash>>
+where
+    F: FnMut(DuplicateScanBatch) -> bool,
+{
+    if let Some(cache_key) = &candidate.cache_key {
+        if let Some(hash) = cache.get(cache_key) {
+            stats.cached_hashes += 1;
+            return Ok(Some(hash));
+        }
+    }
+
+    let hash = content_hash_uncached(&candidate.path, stats, batch_emitter, is_canceled)?;
+    if let Some(hash) = hash {
+        if let Some(cache_key) = &candidate.cache_key {
+            cache.insert(cache_key.clone(), hash);
+        }
+    }
+    Ok(hash)
+}
+
+fn content_hash_uncached<F>(
     path: &Path,
     stats: &mut DuplicateScanStats,
     batch_emitter: &mut DuplicateBatchEmitter<'_, F>,
@@ -578,6 +713,7 @@ mod tests {
             relative: name.to_string(),
             size,
             modified: None,
+            cache_key: None,
         }
     }
 
@@ -597,6 +733,62 @@ mod tests {
 
         assert_eq!(buckets[0][0].size, 1024);
         assert_eq!(buckets[1][0].size, huge_size);
+    }
+
+    #[test]
+    fn same_session_cache_reuses_unchanged_content_hashes() {
+        let root = temp_path("hash-cache-hit");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"same").unwrap();
+        fs::write(root.join("b.txt"), b"same").unwrap();
+        let mut cache = DuplicateHashCache::default();
+
+        let first =
+            scan_duplicates_streaming_with_cache(&root, true, &mut cache, || false, |_| true)
+                .unwrap();
+        let second =
+            scan_duplicates_streaming_with_cache(&root, true, &mut cache, || false, |_| true)
+                .unwrap();
+
+        assert_eq!(first.groups, second.groups);
+        assert_eq!(first.stats.cached_hashes, 0);
+        assert_eq!(first.stats.checked_candidates, first.stats.candidate_files);
+        assert_eq!(second.stats.cached_hashes, second.stats.hashed_files);
+        assert_eq!(
+            second.stats.checked_candidates,
+            second.stats.candidate_files
+        );
+        assert_eq!(second.stats.processed_bytes, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn same_session_cache_misses_when_file_metadata_changes() {
+        let root = temp_path("hash-cache-stale");
+        fs::create_dir_all(&root).unwrap();
+        let changed = root.join("a.txt");
+        fs::write(&changed, b"same").unwrap();
+        fs::write(root.join("b.txt"), b"same").unwrap();
+        let mut cache = DuplicateHashCache::default();
+
+        let first =
+            scan_duplicates_streaming_with_cache(&root, true, &mut cache, || false, |_| true)
+                .unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        fs::write(&changed, b"diff").unwrap();
+        let second =
+            scan_duplicates_streaming_with_cache(&root, true, &mut cache, || false, |_| true)
+                .unwrap();
+
+        assert_eq!(first.groups.len(), 1);
+        assert!(second.groups.is_empty());
+        assert_eq!(
+            second.stats.checked_candidates,
+            second.stats.candidate_files
+        );
+        assert!(second.stats.cached_hashes < second.stats.hashed_files);
+        assert!(second.stats.processed_bytes > 0);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -655,6 +847,7 @@ mod tests {
         assert!(phases.contains(&DuplicateScanPhase::SizeGrouping));
         assert!(phases.contains(&DuplicateScanPhase::ContentChecking));
         assert_eq!(result.stats.candidate_files, 6);
+        assert_eq!(result.stats.checked_candidates, 6);
         assert_eq!(result.stats.hashed_files, 6);
         assert!(result.stats.processed_bytes > 0);
         fs::remove_dir_all(root).unwrap();

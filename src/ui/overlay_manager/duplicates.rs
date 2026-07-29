@@ -101,19 +101,22 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
     let status = if let Some(error) = app.duplicate_error() {
         format!("error: {error}")
     } else if app.duplicate_loading() {
-        format!(
-            "{}…  •  {} files  •  {} candidates  •  {} hashed  •  {} read  •  {} groups  •  {} reclaimable",
-            stats.phase.label(),
-            stats.scanned_files,
-            stats.candidate_files,
-            stats.hashed_files,
-            crate::fs::format_size(stats.processed_bytes),
-            app.duplicate_group_count(),
-            crate::fs::format_size(stats.duplicate_bytes),
-        )
+        let mut parts = vec![format!(
+            "{}/{} checked",
+            stats.checked_candidates, stats.candidate_files
+        )];
+        if stats.cached_hashes > 0 {
+            parts.push(format!("{} cached", stats.cached_hashes));
+        }
+        parts.push(format!("{} groups", app.duplicate_group_count()));
+        parts.push(format!(
+            "{} reclaimable",
+            crate::fs::format_size(stats.duplicate_bytes)
+        ));
+        format!("{}… • {}", stats.phase.label(), parts.join(" • "))
     } else {
         format!(
-            "{} files scanned  •  {} groups  •  {} reclaimable",
+            "{} files scanned • {} groups • {} reclaimable",
             stats.scanned_files,
             app.duplicate_group_count(),
             crate::fs::format_size(stats.duplicate_bytes),
