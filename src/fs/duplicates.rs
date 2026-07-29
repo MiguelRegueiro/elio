@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
-    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
+    collections::{HashMap, VecDeque},
     fs::{self, File},
-    hash::{Hash, Hasher},
     io::{BufReader, Read},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -326,7 +325,7 @@ where
 
     stats.phase = DuplicateScanPhase::FullHashing;
     let _ = batch_emitter.emit_progress(*stats);
-    let mut by_hash: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
+    let mut by_hash: HashMap<blake3::Hash, Vec<CandidateFile>> = HashMap::new();
     for candidate in candidates {
         if is_canceled() {
             break;
@@ -380,7 +379,7 @@ fn partial_duplicate_candidates(
     candidates: Vec<CandidateFile>,
     is_canceled: &impl Fn() -> bool,
 ) -> Vec<CandidateFile> {
-    let mut by_partial: HashMap<u64, Vec<CandidateFile>> = HashMap::new();
+    let mut by_partial: HashMap<blake3::Hash, Vec<CandidateFile>> = HashMap::new();
     for (index, candidate) in candidates.into_iter().enumerate() {
         if is_canceled() {
             break;
@@ -397,15 +396,15 @@ fn partial_duplicate_candidates(
         .collect()
 }
 
-fn partial_content_fingerprint(path: &Path, size: u64) -> Result<u64> {
+fn partial_content_fingerprint(path: &Path, size: u64) -> Result<blake3::Hash> {
     let mut file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut hasher = DefaultHasher::new();
-    size.hash(&mut hasher);
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&size.to_le_bytes());
 
     let mut first = vec![0u8; PARTIAL_CHUNK_SIZE.min(size as usize)];
     let first_read = file.read(&mut first)?;
-    first[..first_read].hash(&mut hasher);
+    hasher.update(&first[..first_read]);
 
     if size > PARTIAL_CHUNK_SIZE as u64 {
         use std::io::{Seek, SeekFrom};
@@ -414,17 +413,17 @@ fn partial_content_fingerprint(path: &Path, size: u64) -> Result<u64> {
         ))?;
         let mut last = vec![0u8; PARTIAL_CHUNK_SIZE];
         let last_read = file.read(&mut last)?;
-        last[..last_read].hash(&mut hasher);
+        hasher.update(&last[..last_read]);
     }
 
-    Ok(hasher.finish())
+    Ok(hasher.finalize())
 }
 
-fn content_hash(path: &Path) -> Result<u64> {
+fn content_hash(path: &Path) -> Result<blake3::Hash> {
     let mut reader = BufReader::new(
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
     );
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0u8; HASH_CHUNK_SIZE];
     let mut chunks = 0usize;
     loop {
@@ -432,11 +431,11 @@ fn content_hash(path: &Path) -> Result<u64> {
         if read == 0 {
             break;
         }
-        buffer[..read].hash(&mut hasher);
+        hasher.update(&buffer[..read]);
         chunks += 1;
         breathe_after_hash_chunk(chunks);
     }
-    Ok(hasher.finish())
+    Ok(hasher.finalize())
 }
 
 fn files_equal(left: &Path, right: &Path) -> Result<bool> {
