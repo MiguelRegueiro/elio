@@ -27,10 +27,7 @@ pub(super) fn render_help(
         keys.action(&kb.zoxide, "zoxide history"),
         keys.action(&kb.search_folders, "search folders"),
         keys.action(&kb.search_files, "search files"),
-        e("Ctrl+←→", "move by word"),
-        e("Ctrl+Backspace", "delete previous word"),
-        e("Ctrl+Del", "delete next word"),
-        e("Ctrl+W / Alt+D", "fallback word delete"),
+        keys.action(&kb.find_duplicates, "find duplicates"),
     ]);
     let clipboard_entries = clipboard_entries(&keys);
     let files_entries = entries([
