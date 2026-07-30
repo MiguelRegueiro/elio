@@ -9,6 +9,13 @@ impl App {
         self.jobs.clipboard = None;
         self.open_paths_in_system(targets)
     }
+    pub(in crate::app::duplicates) fn open_duplicate_open_with_overlay(&mut self) {
+        let Some(entry) = self.duplicate_focused_entry() else {
+            self.status = "Nothing selected".to_string();
+            return;
+        };
+        self.open_open_with_overlay_for_entry(entry);
+    }
     pub(in crate::app::duplicates) fn open_duplicate_rename(&mut self) {
         if self
             .overlays

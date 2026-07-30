@@ -74,9 +74,15 @@ impl App {
             self.status = "Nothing selected".to_string();
             return;
         };
-        let entry = entry.clone();
-        let path = entry.path.clone();
+        self.open_open_with_overlay_for_entry(entry.clone());
+    }
 
+    pub(in crate::app) fn open_open_with_overlay_for_entry(&mut self, entry: crate::core::Entry) {
+        let path = entry.path.clone();
+        #[cfg(test)]
+        let apps = super::discovered_open_with_apps_for_test()
+            .unwrap_or_else(|| super::discovery::discover_open_with_apps_for_entry(&entry));
+        #[cfg(not(test))]
         let apps = super::discovery::discover_open_with_apps_for_entry(&entry);
         self.handle_discovered_open_with_apps(&path, apps, open_with_fallback, |app| {
             detached_open_command(&app.program, &app.args)

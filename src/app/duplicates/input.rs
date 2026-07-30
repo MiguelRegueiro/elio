@@ -24,6 +24,10 @@ impl App {
                     self.open_duplicate_targets()?;
                     return Ok(());
                 }
+                Action::OpenWith => {
+                    self.open_duplicate_open_with_overlay();
+                    return Ok(());
+                }
                 Action::OpenOrEnter => {
                     self.reveal_duplicate_focus()?;
                     return Ok(());

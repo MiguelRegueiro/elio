@@ -7,6 +7,32 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+struct DiscoveredOpenWithAppsGuard;
+
+impl DiscoveredOpenWithAppsGuard {
+    fn install(apps: Vec<crate::app::state::OpenWithApp>) -> Self {
+        crate::app::open_with::set_discovered_open_with_apps_for_test(Some(apps));
+        Self
+    }
+}
+
+impl Drop for DiscoveredOpenWithAppsGuard {
+    fn drop(&mut self) {
+        crate::app::open_with::set_discovered_open_with_apps_for_test(None);
+    }
+}
+
+fn fake_open_with_app(display_name: &str) -> crate::app::state::OpenWithApp {
+    crate::app::state::OpenWithApp {
+        display_name: display_name.to_string(),
+        desktop_id: None,
+        program: "true".to_string(),
+        args: vec![],
+        is_default: false,
+        requires_terminal: false,
+    }
+}
+
 fn temp_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "elio-duplicates-overlay-{label}-{}",
@@ -78,6 +104,49 @@ fn duplicate_finder_help_shortcut_opens_help_overlay_on_top() {
 
     assert!(app.duplicates_is_open());
     assert!(!app.overlays.help);
+
+    app.close_duplicate_finder();
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn duplicate_open_with_binding_opens_open_with_overlay_on_top() {
+    let root = temp_path("open-with-on-top");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    fs::write(root.join("alpha.txt"), "same").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "same").expect("failed to write beta");
+    let _open_with_apps = DiscoveredOpenWithAppsGuard::install(vec![
+        fake_open_with_app("Text Editor"),
+        fake_open_with_app("Viewer"),
+    ]);
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_duplicate_finder();
+    let overlay = app
+        .overlays
+        .duplicates
+        .as_mut()
+        .expect("duplicate overlay should be open");
+    overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])]
+        .into_iter()
+        .map(|mut group| {
+            for file in &mut group.files {
+                file.path = root.join(file.path.file_name().unwrap());
+            }
+            group
+        })
+        .collect();
+    overlay.loading = false;
+    overlay.selected = 1;
+
+    app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT))
+        .expect("Open With should open over duplicate finder");
+
+    assert!(app.duplicates_is_open());
+    assert!(app.open_with_is_open());
+    assert_eq!(app.open_with_row_count(), 2);
+    assert_eq!(app.open_with_row_label(0), "Text Editor");
+    assert_eq!(app.open_with_row_label(1), "Viewer");
 
     app.close_duplicate_finder();
     fs::remove_dir_all(root).expect("failed to remove temp root");

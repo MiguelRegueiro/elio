@@ -8,7 +8,7 @@ mod tests;
 use std::cell::RefCell;
 use std::path::Path;
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 use super::state::OpenWithApp;
 #[cfg(all(unix, not(target_os = "macos")))]
 use crate::core::Entry;
@@ -22,6 +22,21 @@ thread_local! {
     static TEST_DEFAULT_OPEN_WITH_APP: RefCell<Option<OpenWithApp>> = const { RefCell::new(None) };
     static TEST_OPEN_WITH_APPS_FOUND: RefCell<Option<bool>> = const { RefCell::new(None) };
     static TEST_EDITOR_FALLBACK_APP: RefCell<Option<OpenWithApp>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DISCOVER_OPEN_WITH_APPS: RefCell<Option<Vec<OpenWithApp>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::app) fn set_discovered_open_with_apps_for_test(apps: Option<Vec<OpenWithApp>>) {
+    TEST_DISCOVER_OPEN_WITH_APPS.with(|slot| *slot.borrow_mut() = apps);
+}
+
+#[cfg(test)]
+pub(in crate::app) fn discovered_open_with_apps_for_test() -> Option<Vec<OpenWithApp>> {
+    TEST_DISCOVER_OPEN_WITH_APPS.with(|slot| slot.borrow().clone())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
