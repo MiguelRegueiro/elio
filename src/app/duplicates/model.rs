@@ -102,6 +102,9 @@ impl App {
     pub fn duplicate_loading(&self) -> bool {
         self.overlays.duplicates.as_ref().is_some_and(|d| d.loading)
     }
+    pub fn duplicate_partial(&self) -> bool {
+        self.overlays.duplicates.as_ref().is_some_and(|d| d.partial)
+    }
     pub fn duplicate_error(&self) -> Option<&str> {
         self.overlays
             .duplicates

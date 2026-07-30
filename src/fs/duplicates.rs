@@ -43,6 +43,10 @@ impl DuplicateGroup {
     }
 }
 
+pub(crate) fn sort_duplicate_groups(groups: &mut [DuplicateGroup]) {
+    groups.sort_by(compare_groups);
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum DuplicateScanPhase {
     #[default]

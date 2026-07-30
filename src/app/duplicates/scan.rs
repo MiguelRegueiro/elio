@@ -23,6 +23,7 @@ impl App {
             scroll: 0,
             selected_paths: HashSet::new(),
             loading: true,
+            partial: false,
             error: None,
             preview_visible: true,
             preview_path: None,
@@ -37,6 +38,40 @@ impl App {
             overlay.loading = false;
             overlay.error = Some("Duplicate worker unavailable".to_string());
         }
+        self.refresh_duplicate_preview();
+    }
+
+    pub(in crate::app::duplicates) fn stop_duplicate_scan_with_partial_results(&mut self) {
+        let Some(overlay) = self
+            .overlays
+            .duplicates
+            .as_mut()
+            .filter(|overlay| overlay.loading)
+        else {
+            return;
+        };
+        self.jobs.duplicate_token = self.jobs.duplicate_token.wrapping_add(1);
+        self.jobs.scheduler.cancel_duplicate_scan();
+        crate::fs::duplicates::sort_duplicate_groups(&mut overlay.groups);
+        overlay.loading = false;
+        overlay.partial = true;
+        overlay.error = None;
+        overlay.selected = 0;
+        overlay.scroll = 0;
+        overlay.stats.groups = overlay.groups.len();
+        overlay.stats.duplicate_bytes = overlay
+            .groups
+            .iter()
+            .map(crate::fs::duplicates::DuplicateGroup::duplicate_bytes)
+            .sum();
+        overlay.selected_paths.retain(|path| {
+            overlay
+                .groups
+                .iter()
+                .any(|group| group.files.iter().any(|file| &file.path == path))
+        });
+        self.status = "Duplicate scan stopped".to_string();
+        self.sync_duplicate_scroll();
         self.refresh_duplicate_preview();
     }
 
@@ -83,11 +118,13 @@ impl App {
                     overlay.stats = result.stats;
                     overlay.selected = 0;
                     overlay.scroll = 0;
+                    overlay.partial = false;
                     overlay.error = None;
                 }
                 Err(error) => {
                     overlay.groups.clear();
                     overlay.stats = crate::fs::duplicates::DuplicateScanStats::default();
+                    overlay.partial = false;
                     overlay.error = Some(error);
                 }
             }

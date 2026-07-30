@@ -102,6 +102,8 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
         format!("error: {error}")
     } else if app.duplicate_loading() {
         duplicate_loading_status(stats, app.duplicate_group_count())
+    } else if app.duplicate_partial() {
+        duplicate_partial_status(stats, app.duplicate_group_count())
     } else {
         format!(
             "{} files scanned • {} groups • {} reclaimable",
@@ -147,6 +149,19 @@ fn duplicate_loading_status(
         crate::fs::format_size(stats.duplicate_bytes)
     ));
     format!("{}… • {}", stats.phase.label(), parts.join(" • "))
+}
+
+fn duplicate_partial_status(
+    stats: crate::fs::duplicates::DuplicateScanStats,
+    group_count: usize,
+) -> String {
+    format!(
+        "partial results • {}/{} checked • {} groups • {} reclaimable",
+        stats.checked_candidates,
+        stats.candidate_files,
+        group_count,
+        crate::fs::format_size(stats.duplicate_bytes)
+    )
 }
 
 fn render_results(
@@ -542,7 +557,7 @@ fn render_preview_scrollbar(
 mod tests {
     use super::{
         MIN_PREVIEW_WIDTH, MIN_RESULTS_WIDTH_WITH_PREVIEW, duplicate_group_label,
-        duplicate_loading_status, duplicate_preview_width,
+        duplicate_loading_status, duplicate_partial_status, duplicate_preview_width,
     };
     use crate::fs::duplicates::{DuplicateScanPhase, DuplicateScanStats};
 
@@ -595,6 +610,25 @@ mod tests {
         assert_eq!(
             status,
             "checking… • 300549/300552 checked • 170 GB read • 42 cached • 18 groups • 21 GB reclaimable"
+        );
+    }
+
+    #[test]
+    fn duplicate_partial_status_omits_bytes_read_after_stop() {
+        let status = duplicate_partial_status(
+            DuplicateScanStats {
+                checked_candidates: 300_549,
+                candidate_files: 300_552,
+                processed_bytes: 170_000_000_000,
+                duplicate_bytes: 21_000_000_000,
+                ..DuplicateScanStats::default()
+            },
+            18,
+        );
+
+        assert_eq!(
+            status,
+            "partial results • 300549/300552 checked • 18 groups • 21 GB reclaimable"
         );
     }
 }

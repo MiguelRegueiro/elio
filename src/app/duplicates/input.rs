@@ -4,6 +4,10 @@ use super::*;
 impl App {
     pub(in crate::app) fn handle_duplicate_key(&mut self, key: KeyEvent) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            if self.duplicate_loading() {
+                self.stop_duplicate_scan_with_partial_results();
+                return Ok(());
+            }
             self.clear_duplicate_selection_or_close();
             return Ok(());
         }
@@ -113,6 +117,10 @@ impl App {
             }
         }
         if key.modifiers == KeyModifiers::NONE && matches!(key.code, KeyCode::Esc) {
+            if self.duplicate_loading() {
+                self.stop_duplicate_scan_with_partial_results();
+                return Ok(());
+            }
             self.clear_duplicate_selection_or_close();
         }
         Ok(())

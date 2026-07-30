@@ -110,6 +110,61 @@ fn duplicate_finder_help_shortcut_opens_help_overlay_on_top() {
 }
 
 #[test]
+fn duplicate_scan_stop_keeps_sorted_partial_results_and_unlocks_actions() {
+    let root = temp_path("stop-partial-results");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    for name in ["small-a.txt", "small-b.txt", "large-a.txt", "large-b.txt"] {
+        fs::write(root.join(name), "same").expect("failed to write duplicate file");
+    }
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_duplicate_finder();
+    let overlay = app
+        .overlays
+        .duplicates
+        .as_mut()
+        .expect("duplicate overlay should be open");
+    overlay.groups = vec![
+        duplicate_group_at(&root, 1, 10, &["small-a.txt", "small-b.txt"]),
+        duplicate_group_at(&root, 2, 100, &["large-a.txt", "large-b.txt"]),
+    ];
+    overlay.stats = crate::fs::duplicates::DuplicateScanStats {
+        checked_candidates: 300_549,
+        candidate_files: 300_552,
+        processed_bytes: 170_000_000_000,
+        ..crate::fs::duplicates::DuplicateScanStats::default()
+    };
+    overlay.selected = 3;
+    overlay.scroll = 2;
+    overlay.selected_paths.insert(root.join("large-b.txt"));
+    overlay.loading = true;
+
+    app.handle_duplicate_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .expect("Esc should stop duplicate scan");
+
+    let overlay = app
+        .overlays
+        .duplicates
+        .as_ref()
+        .expect("duplicate overlay should remain open");
+    assert!(!overlay.loading);
+    assert!(overlay.partial);
+    assert_eq!(overlay.selected, 0);
+    assert_eq!(overlay.scroll, 0);
+    assert_eq!(overlay.groups[0].size, 100);
+    assert_eq!(overlay.stats.groups, 2);
+    assert_eq!(overlay.stats.duplicate_bytes, 110);
+    assert_eq!(app.status_message(), "Duplicate scan stopped");
+
+    app.open_duplicate_delete_permanently_prompt();
+    assert!(app.trash_is_open());
+    assert_eq!(app.trash_title(), "Delete permanently 1 selected file?");
+
+    app.close_duplicate_finder();
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn duplicate_open_with_binding_opens_open_with_overlay_on_top() {
     let root = temp_path("open-with-on-top");
     fs::create_dir_all(&root).expect("failed to create temp root");

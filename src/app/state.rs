@@ -274,6 +274,7 @@ pub(super) struct DuplicateFinderOverlay {
     pub(super) scroll: usize,
     pub(super) selected_paths: HashSet<PathBuf>,
     pub(super) loading: bool,
+    pub(super) partial: bool,
     pub(super) error: Option<String>,
     pub(super) preview_visible: bool,
     pub(super) preview_path: Option<PathBuf>,

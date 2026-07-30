@@ -619,6 +619,7 @@ fn finish_editor_bulk_rename_opens_confirmation_with_relative_paths() {
         scroll: 0,
         selected_paths: [beta.clone()].into_iter().collect(),
         loading: false,
+        partial: false,
         error: None,
         preview_visible: true,
         preview_path: Some(alpha.clone()),
