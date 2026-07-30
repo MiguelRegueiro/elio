@@ -213,6 +213,8 @@ impl App {
                 Ok(result) => {
                     overlay.groups = result.groups;
                     overlay.stats = result.stats;
+                    overlay.selected = 0;
+                    overlay.scroll = 0;
                     overlay.error = None;
                 }
                 Err(error) => {
@@ -1054,6 +1056,59 @@ mod tests {
             app.duplicate_focused_path(),
             Some(PathBuf::from("small-a.txt")),
             "streamed batches should not resort the list and steal preview focus"
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_final_result_resets_focus_to_top_after_reorder() {
+        let root = temp_path("final-result-focus-top");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(
+            1,
+            10,
+            &["small-a.txt", "small-b.txt", "small-c.txt"],
+        )];
+        overlay.selected = 2;
+        overlay.scroll = 2;
+        overlay.selected_paths.insert(PathBuf::from("small-c.txt"));
+        overlay.preview_path = Some(PathBuf::from("small-c.txt"));
+
+        app.apply_duplicate_result(Ok(crate::fs::duplicates::DuplicateScanResult {
+            groups: vec![
+                duplicate_group(2, 10_000, &["large-a.txt", "large-b.txt"]),
+                duplicate_group(1, 10, &["small-a.txt", "small-b.txt", "small-c.txt"]),
+            ],
+            stats: crate::fs::duplicates::DuplicateScanStats::default(),
+        }));
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_ref()
+            .expect("duplicate overlay should stay open");
+        assert_eq!(overlay.selected, 0);
+        assert_eq!(overlay.scroll, 0);
+        assert_eq!(app.duplicate_scroll_top(), 0);
+        assert_eq!(
+            app.duplicate_focused_path(),
+            Some(PathBuf::from("large-a.txt"))
+        );
+        assert_eq!(overlay.preview_path, Some(PathBuf::from("large-a.txt")));
+        assert!(
+            overlay
+                .selected_paths
+                .contains(&PathBuf::from("small-c.txt"))
         );
 
         app.close_duplicate_finder();
