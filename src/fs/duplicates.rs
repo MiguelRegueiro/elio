@@ -628,9 +628,9 @@ fn breathe_after_hash_chunk(chunks: usize) {
 
 fn compare_groups(left: &DuplicateGroup, right: &DuplicateGroup) -> std::cmp::Ordering {
     right
-        .duplicate_bytes()
-        .cmp(&left.duplicate_bytes())
-        .then_with(|| right.size.cmp(&left.size))
+        .size
+        .cmp(&left.size)
+        .then_with(|| right.duplicate_bytes().cmp(&left.duplicate_bytes()))
         .then_with(|| {
             left.files
                 .first()
@@ -715,6 +715,44 @@ mod tests {
             modified: None,
             cache_key: None,
         }
+    }
+
+    fn duplicate_group(id: u64, size: u64, names: &[&str]) -> DuplicateGroup {
+        DuplicateGroup {
+            id,
+            size,
+            files: names
+                .iter()
+                .map(|name| DuplicateFile {
+                    path: PathBuf::from(name),
+                    name: (*name).to_string(),
+                    relative: (*name).to_string(),
+                    size,
+                    modified: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn duplicate_group_order_prefers_larger_files_before_larger_reclaimable_groups() {
+        let mut groups = [
+            duplicate_group(1, 700 * 1024, &["small-a", "small-b", "small-c", "small-d"]),
+            duplicate_group(2, 20 * 1024 * 1024, &["medium-a", "medium-b"]),
+            duplicate_group(
+                3,
+                20 * 1024 * 1024,
+                &["medium-more-a", "medium-more-b", "medium-more-c"],
+            ),
+            duplicate_group(4, 460 * 1024 * 1024, &["large-a", "large-b"]),
+        ];
+
+        groups.sort_by(compare_groups);
+
+        assert_eq!(
+            groups.iter().map(|group| group.id).collect::<Vec<_>>(),
+            vec![4, 3, 2, 1]
+        );
     }
 
     #[test]
