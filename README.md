@@ -70,6 +70,14 @@ Install from Homebrew:
 brew install elio
 ```
 
+### FreeBSD
+
+Install the FreeBSD package:
+
+```bash
+pkg install elio
+```
+
 ### Cargo
 
 Install from crates.io:
