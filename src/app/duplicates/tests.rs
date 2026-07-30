@@ -43,6 +43,17 @@ fn temp_path(label: &str) -> PathBuf {
     ))
 }
 
+fn wait_for_directory_reload(app: &mut App) {
+    for _ in 0..500 {
+        let _ = app.process_background_jobs();
+        if app.navigation.directory_runtime.pending_load.is_none() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("timed out waiting for directory reload to complete");
+}
+
 #[test]
 fn opening_duplicate_finder_clears_browser_selection() {
     let root = temp_path("clears-browser-selection");
@@ -272,10 +283,15 @@ fn duplicate_row_double_click_reveals_clicked_file() {
     app.handle_event(click)
         .expect("double click should reveal duplicate row");
 
+    let expected = root.join("beta.txt");
     assert!(!app.duplicates_is_open());
+    if let Some(load) = app.navigation.directory_runtime.pending_load.as_ref() {
+        assert_eq!(load.reselect_path.as_ref(), Some(&expected));
+    }
+    wait_for_directory_reload(&mut app);
     assert_eq!(
         app.selected_entry().map(|entry| entry.path.clone()),
-        Some(root.join("beta.txt"))
+        Some(expected)
     );
     assert_eq!(app.status_message(), "Located beta.txt");
 
