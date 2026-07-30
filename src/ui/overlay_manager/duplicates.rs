@@ -101,19 +101,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
     let status = if let Some(error) = app.duplicate_error() {
         format!("error: {error}")
     } else if app.duplicate_loading() {
-        let mut parts = vec![format!(
-            "{}/{} checked",
-            stats.checked_candidates, stats.candidate_files
-        )];
-        if stats.cached_hashes > 0 {
-            parts.push(format!("{} cached", stats.cached_hashes));
-        }
-        parts.push(format!("{} groups", app.duplicate_group_count()));
-        parts.push(format!(
-            "{} reclaimable",
-            crate::fs::format_size(stats.duplicate_bytes)
-        ));
-        format!("{}… • {}", stats.phase.label(), parts.join(" • "))
+        duplicate_loading_status(stats, app.duplicate_group_count())
     } else {
         format!(
             "{} files scanned • {} groups • {} reclaimable",
@@ -134,6 +122,31 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, palette: Palette)
             .style(Style::default().bg(palette.chrome_alt).fg(palette.text)),
         area,
     );
+}
+
+fn duplicate_loading_status(
+    stats: crate::fs::duplicates::DuplicateScanStats,
+    group_count: usize,
+) -> String {
+    let mut parts = vec![format!(
+        "{}/{} checked",
+        stats.checked_candidates, stats.candidate_files
+    )];
+    if stats.processed_bytes > 0 {
+        parts.push(format!(
+            "{} read",
+            crate::fs::format_size(stats.processed_bytes)
+        ));
+    }
+    if stats.cached_hashes > 0 {
+        parts.push(format!("{} cached", stats.cached_hashes));
+    }
+    parts.push(format!("{group_count} groups"));
+    parts.push(format!(
+        "{} reclaimable",
+        crate::fs::format_size(stats.duplicate_bytes)
+    ));
+    format!("{}… • {}", stats.phase.label(), parts.join(" • "))
 }
 
 fn render_results(
@@ -529,8 +542,9 @@ fn render_preview_scrollbar(
 mod tests {
     use super::{
         MIN_PREVIEW_WIDTH, MIN_RESULTS_WIDTH_WITH_PREVIEW, duplicate_group_label,
-        duplicate_preview_width,
+        duplicate_loading_status, duplicate_preview_width,
     };
+    use crate::fs::duplicates::{DuplicateScanPhase, DuplicateScanStats};
 
     #[test]
     fn duplicate_group_labels_zero_pad_to_rank_width() {
@@ -561,5 +575,26 @@ mod tests {
             );
             previous = current;
         }
+    }
+
+    #[test]
+    fn duplicate_loading_status_shows_bytes_read_while_checking() {
+        let status = duplicate_loading_status(
+            DuplicateScanStats {
+                phase: DuplicateScanPhase::ContentChecking,
+                checked_candidates: 300_549,
+                candidate_files: 300_552,
+                processed_bytes: 170_000_000_000,
+                cached_hashes: 42,
+                duplicate_bytes: 21_000_000_000,
+                ..DuplicateScanStats::default()
+            },
+            18,
+        );
+
+        assert_eq!(
+            status,
+            "checking… • 300549/300552 checked • 170 GB read • 42 cached • 18 groups • 21 GB reclaimable"
+        );
     }
 }
