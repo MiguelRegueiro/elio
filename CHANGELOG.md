@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added Duplicate Finder to scan for duplicate files and safely trash, delete, rename, open, or reveal them. ([#258])
+- Added Duplicate Finder to find files with identical contents, regardless of name, and safely trash, delete, rename, open, or reveal them. ([#258])
 - Added a configurable `toggle_preview` (`V`) shortcut to show or hide the preview pane. ([#251])
 - Added a configurable `fullscreen_preview` (`P`) shortcut to temporarily expand the preview pane.
 - Added bulk archive extraction for selected archives. ([#241])

@@ -249,7 +249,7 @@ impl App {
         self.input.last_wheel_target
     }
 
-    fn is_double_click(&self, path: &Path) -> bool {
+    pub(in crate::app) fn is_double_click(&self, path: &Path) -> bool {
         self.input
             .last_click
             .as_ref()

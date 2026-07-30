@@ -153,6 +153,81 @@ fn duplicate_open_with_binding_opens_open_with_overlay_on_top() {
 }
 
 #[test]
+fn duplicate_row_double_click_reveals_clicked_file() {
+    let root = temp_path("double-click-reveals");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    fs::write(root.join("alpha.txt"), "same").expect("failed to write alpha");
+    fs::write(root.join("beta.txt"), "same").expect("failed to write beta");
+
+    let mut app = App::new_at(root.clone()).expect("failed to create app");
+    app.open_duplicate_finder();
+    let overlay = app
+        .overlays
+        .duplicates
+        .as_mut()
+        .expect("duplicate overlay should be open");
+    overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])]
+        .into_iter()
+        .map(|mut group| {
+            for file in &mut group.files {
+                file.path = root.join(file.path.file_name().unwrap());
+            }
+            group
+        })
+        .collect();
+    overlay.loading = false;
+    app.input.frame_state.duplicate_panel = Some(ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 4,
+    });
+    app.input.frame_state.duplicate_hits = vec![
+        DuplicateHit {
+            rect: ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 1,
+            },
+            index: 0,
+        },
+        DuplicateHit {
+            rect: ratatui::layout::Rect {
+                x: 0,
+                y: 1,
+                width: 40,
+                height: 1,
+            },
+            index: 1,
+        },
+    ];
+    let click = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    app.handle_event(click.clone())
+        .expect("first click should focus duplicate row");
+    assert!(app.duplicates_is_open());
+    assert_eq!(app.duplicate_focused_path(), Some(root.join("beta.txt")));
+
+    app.handle_event(click)
+        .expect("double click should reveal duplicate row");
+
+    assert!(!app.duplicates_is_open());
+    assert_eq!(
+        app.selected_entry().map(|entry| entry.path.clone()),
+        Some(root.join("beta.txt"))
+    );
+    assert_eq!(app.status_message(), "Located beta.txt");
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn duplicate_finder_help_overlay_consumes_mouse_wheel() {
     let root = temp_path("help-mouse-wheel");
     fs::create_dir_all(&root).expect("failed to create temp root");

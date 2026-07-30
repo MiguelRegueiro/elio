@@ -225,6 +225,15 @@ impl App {
                     .cloned()
                 {
                     self.set_duplicate_selection(hit.index);
+                    if let Some(path) = self.duplicate_focused_path() {
+                        if self.is_double_click(&path) {
+                            self.reveal_duplicate_focus()?;
+                        }
+                        self.input.last_click = Some(ClickState {
+                            path,
+                            at: std::time::Instant::now(),
+                        });
+                    }
                 } else if self
                     .input
                     .frame_state
