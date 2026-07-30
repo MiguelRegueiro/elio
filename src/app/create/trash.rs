@@ -90,9 +90,26 @@ impl App {
         self.open_trash_prompt_for_targets(targets, true);
     }
 
+    pub(in crate::app) fn open_trash_prompt_for_explicit_targets(
+        &mut self,
+        targets: Vec<TrashTarget>,
+        permanent: bool,
+    ) {
+        self.overlays.help = false;
+        self.overlays.search = None;
+        self.overlays.create = None;
+        self.overlays.trash = Some(TrashOverlay {
+            targets,
+            scroll: 0,
+            confirmed: true,
+            permanent,
+        });
+    }
+
     fn open_trash_prompt_for_targets(&mut self, targets: Vec<TrashTarget>, permanent: bool) {
         self.overlays.help = false;
         self.overlays.search = None;
+        self.overlays.duplicates = None;
         self.overlays.create = None;
         self.overlays.trash = Some(TrashOverlay {
             targets,
@@ -336,6 +353,11 @@ impl App {
         if t.targets.is_empty() {
             return Ok(());
         }
+        let duplicate_targets = self
+            .overlays
+            .duplicates
+            .is_some()
+            .then(|| t.targets.iter().map(|target| target.path.clone()).collect());
         self.navigation.selected_paths.clear();
         let target_paths: Vec<PathBuf> =
             t.targets.iter().map(|target| target.path.clone()).collect();
@@ -368,6 +390,7 @@ impl App {
             completed: 0,
             total: t.targets.len(),
             permanent: t.permanent,
+            duplicate_targets,
             next_selection,
         });
         self.jobs.trash_source_cwd = Some(source_cwd.clone());

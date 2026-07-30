@@ -147,6 +147,7 @@
 # copy_path            = "c"
 # search_folders       = "f"
 # search_files         = "ctrl+f"
+# find_duplicates      = "alt+d"
 # zoxide               = "z"
 # shell                = "!"
 # open                 = "o"

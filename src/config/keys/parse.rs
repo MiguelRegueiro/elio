@@ -32,6 +32,7 @@ pub(in crate::config) struct KeysConfigOverride {
     pub(super) search_folders: Option<KeyConfigOverride>,
     pub(super) search_files: Option<KeyConfigOverride>,
     pub(super) filter_directory: Option<KeyConfigOverride>,
+    pub(super) find_duplicates: Option<KeyConfigOverride>,
     pub(super) zoxide: Option<KeyConfigOverride>,
     pub(super) shell: Option<KeyConfigOverride>,
     pub(super) open: Option<KeyConfigOverride>,

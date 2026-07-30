@@ -3,6 +3,7 @@ use crate::app::overlays::inline_image::TerminalWindowSize;
 use crate::app::overlays::pdf::PdfProbeResult;
 use crate::app::{ClipOp, SearchScope};
 use crate::core::{Entry, SortMode};
+use crate::fs::duplicates::{DuplicateScanBatch, DuplicateScanResult};
 use crate::fs::search::{SearchIndex, SearchIndexBatch};
 use crate::{preview, preview::PreviewWorkClass};
 use std::{path::PathBuf, sync::Arc, time::SystemTime};
@@ -67,6 +68,29 @@ pub(in crate::app) struct SearchRequest {
     pub(in crate::app) scope: SearchScope,
     pub(in crate::app) show_hidden: bool,
     pub(in crate::app) fingerprint: crate::fs::DirectoryFingerprint,
+}
+
+#[derive(Debug)]
+pub(in crate::app) struct DuplicateScanBuild {
+    pub(in crate::app) token: u64,
+    pub(in crate::app) cwd: PathBuf,
+    pub(in crate::app) show_hidden: bool,
+    pub(in crate::app) result: Result<DuplicateScanResult, String>,
+}
+
+#[derive(Debug)]
+pub(in crate::app) struct DuplicateScanBatchBuild {
+    pub(in crate::app) token: u64,
+    pub(in crate::app) cwd: PathBuf,
+    pub(in crate::app) show_hidden: bool,
+    pub(in crate::app) batch: DuplicateScanBatch,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::app) struct DuplicateScanRequest {
+    pub(in crate::app) token: u64,
+    pub(in crate::app) cwd: PathBuf,
+    pub(in crate::app) show_hidden: bool,
 }
 
 #[derive(Debug)]
@@ -454,6 +478,8 @@ pub(in crate::app) enum JobResult {
     PdfRender(PdfRenderBuild),
     SearchBatch(SearchBatchBuild),
     Search(SearchBuild),
+    DuplicateScanBatch(DuplicateScanBatchBuild),
+    DuplicateScan(DuplicateScanBuild),
     Preview(Box<PreviewBuild>),
     ArchiveCreate(ArchiveCreateBuild),
     ArchiveExtract(ArchiveExtractBuild),

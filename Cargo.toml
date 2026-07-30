@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 anyhow = "1.0"
+blake3 = "1"
 color_quant = "1.1"
 dirs = "6"
 libc = "0.2"

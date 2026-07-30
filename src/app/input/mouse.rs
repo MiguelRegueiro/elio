@@ -48,25 +48,16 @@ impl App {
             return self.handle_open_with_mouse(mouse);
         }
 
-        if self.overlays.search.is_some() {
-            return self.handle_search_mouse(mouse);
+        if self.overlays.help {
+            return self.handle_help_mouse(mouse);
         }
 
-        if self.overlays.help {
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.clear_wheel_scroll();
-                    self.overlays.help = false;
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_help_by(HELP_WHEEL_LINES);
-                }
-                MouseEventKind::ScrollUp => {
-                    self.scroll_help_by(-HELP_WHEEL_LINES);
-                }
-                _ => {}
-            }
-            return Ok(());
+        if self.overlays.duplicates.is_some() {
+            return self.handle_duplicate_mouse(mouse);
+        }
+
+        if self.overlays.search.is_some() {
+            return self.handle_search_mouse(mouse);
         }
 
         if self.preview_fullscreen() {
@@ -187,6 +178,23 @@ impl App {
         Ok(())
     }
 
+    fn handle_help_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.clear_wheel_scroll();
+                self.overlays.help = false;
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_help_by(HELP_WHEEL_LINES);
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_help_by(-HELP_WHEEL_LINES);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn panel_target_at(&self, column: u16, row: u16) -> Option<WheelTarget> {
         if self
             .input
@@ -241,7 +249,7 @@ impl App {
         self.input.last_wheel_target
     }
 
-    fn is_double_click(&self, path: &Path) -> bool {
+    pub(in crate::app) fn is_double_click(&self, path: &Path) -> bool {
         self.input
             .last_click
             .as_ref()

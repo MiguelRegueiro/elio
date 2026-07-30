@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added Duplicate Finder to find files with identical contents, regardless of name, and safely trash, delete, rename, open, or reveal them. ([#258])
 - Added a configurable `toggle_preview` (`V`) shortcut to show or hide the preview pane. ([#251])
 - Added a configurable `fullscreen_preview` (`P`) shortcut to temporarily expand the preview pane.
 - Added bulk archive extraction for selected archives. ([#241])
@@ -325,6 +326,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.1.0]: https://github.com/elio-fm/elio/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/elio-fm/elio/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/elio-fm/elio/releases/tag/v1.0.0
+[#258]: https://github.com/elio-fm/elio/issues/258
 [#251]: https://github.com/elio-fm/elio/issues/251
 [#241]: https://github.com/elio-fm/elio/issues/241
 [#240]: https://github.com/elio-fm/elio/issues/240

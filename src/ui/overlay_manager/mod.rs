@@ -7,6 +7,7 @@ mod archive_password;
 mod bulk_rename;
 mod copy;
 mod create;
+mod duplicates;
 mod editor_rename_confirm;
 mod goto;
 mod help;
@@ -143,6 +144,16 @@ pub(super) fn render_search_overlay(
     palette: Palette,
 ) {
     search::render_search_overlay(frame, area, app, state, palette);
+}
+
+pub(super) fn render_duplicate_overlay(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    state: &mut FrameState,
+    palette: Palette,
+) {
+    duplicates::render_duplicate_overlay(frame, area, app, state, palette);
 }
 
 pub(super) fn render_help(

@@ -32,6 +32,7 @@ impl Default for KeyBindings {
             search_folders: KeyList::one('f'),
             search_files: KeyList(vec![KeySpec::ctrl_char('f')]),
             filter_directory: KeyList::one('/'),
+            find_duplicates: KeyList(vec![KeySpec::alt_char('d')]),
             zoxide: KeyList::one('z'),
             shell: KeyList::one('!'),
             open: KeyList::one('o'),

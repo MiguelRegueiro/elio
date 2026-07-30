@@ -22,6 +22,7 @@ pub(crate) enum Action {
     SearchFolders,
     SearchFiles,
     FilterDirectory,
+    FindDuplicates,
     Zoxide,
     Shell,
     Open,
@@ -267,6 +268,16 @@ impl KeySpec {
         }
     }
 
+    pub(super) fn alt_char(c: char) -> Self {
+        Self {
+            code: KeyCodeSpec::Char(c),
+            modifiers: KeyModifierSpec {
+                alt: true,
+                ..KeyModifierSpec::NONE
+            },
+        }
+    }
+
     pub(super) fn alt_named(named: NamedKey) -> Self {
         Self {
             code: KeyCodeSpec::Named(named),
@@ -449,6 +460,7 @@ pub(crate) struct KeyBindings {
     pub search_folders: KeyList,
     pub search_files: KeyList,
     pub filter_directory: KeyList,
+    pub find_duplicates: KeyList,
     pub zoxide: KeyList,
     pub shell: KeyList,
     pub open: KeyList,
