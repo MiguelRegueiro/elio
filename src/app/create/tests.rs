@@ -1,8 +1,10 @@
 #[cfg(unix)]
+use super::super::state::DuplicateFinderOverlay;
+#[cfg(unix)]
 use super::super::state::{BulkRenameEditorSession, PendingTerminalTask};
 use super::super::{
     App,
-    state::{BulkRenameItem, BulkRenameOverlay, DirectoryLoadCompletion, DuplicateFinderOverlay},
+    state::{BulkRenameItem, BulkRenameOverlay, DirectoryLoadCompletion},
 };
 use super::rename;
 #[cfg(unix)]

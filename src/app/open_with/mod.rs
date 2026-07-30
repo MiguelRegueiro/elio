@@ -4,7 +4,7 @@ mod overlay;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, unix, not(target_os = "macos")))]
+#[cfg(test)]
 use std::cell::RefCell;
 use std::path::Path;
 
