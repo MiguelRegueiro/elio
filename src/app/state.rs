@@ -124,6 +124,10 @@ pub(super) struct TrashProgress {
     pub(super) completed: usize,
     pub(super) total: usize,
     pub(super) permanent: bool,
+    /// Duplicate Finder rows targeted by this operation.  When present, the
+    /// completion handler removes only these stale virtual rows and keeps the
+    /// duplicate overlay open.
+    pub(super) duplicate_targets: Option<Vec<std::path::PathBuf>>,
     /// Path of the entry to select after deletion completes: the first
     /// surviving entry at or after the cursor, falling back to the last entry
     /// before the cursor.  Stored as a path (not name) so it takes priority

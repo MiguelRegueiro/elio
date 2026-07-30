@@ -350,14 +350,15 @@ impl App {
         let Some(t) = self.overlays.trash.take() else {
             return Ok(());
         };
-        let had_duplicate_overlay = self.overlays.duplicates.is_some();
         if t.targets.is_empty() {
             return Ok(());
         }
+        let duplicate_targets = self
+            .overlays
+            .duplicates
+            .is_some()
+            .then(|| t.targets.iter().map(|target| target.path.clone()).collect());
         self.navigation.selected_paths.clear();
-        if had_duplicate_overlay {
-            self.overlays.duplicates = None;
-        }
         let target_paths: Vec<PathBuf> =
             t.targets.iter().map(|target| target.path.clone()).collect();
         let source_cwd = self.queue_directory_escape_for_paths(&target_paths)?;
@@ -389,6 +390,7 @@ impl App {
             completed: 0,
             total: t.targets.len(),
             permanent: t.permanent,
+            duplicate_targets,
             next_selection,
         });
         self.jobs.trash_source_cwd = Some(source_cwd.clone());

@@ -242,9 +242,7 @@ impl App {
             self.overlays.help = true;
             return Ok(());
         }
-        if let Some(action) =
-            crate::config::keys().action_for_key_in_context(key, self.key_context())
-        {
+        if let Some(action) = crate::config::keys().action_for_key(key) {
             use crate::config::Action;
             match action {
                 Action::Quit | Action::QuitWithoutCd => {
@@ -273,6 +271,10 @@ impl App {
                 }
                 Action::Trash => {
                     self.open_duplicate_trash_prompt();
+                    return Ok(());
+                }
+                Action::DeletePermanently => {
+                    self.open_duplicate_delete_permanently_prompt();
                     return Ok(());
                 }
                 Action::SelectAll => {
@@ -507,12 +509,39 @@ impl App {
         result
     }
     fn open_duplicate_trash_prompt(&mut self) {
-        if self.duplicate_loading() {
-            self.status = "Wait for duplicate scan to finish before trashing results".to_string();
+        let Some(targets) = self.duplicate_trash_targets_or_status(false) else {
             return;
+        };
+        let has_trash = targets
+            .iter()
+            .any(|target| self.trash_target_is_inside_trash(&target.path));
+        let has_normal = targets
+            .iter()
+            .any(|target| !self.trash_target_is_inside_trash(&target.path));
+        match (has_trash, has_normal) {
+            (true, true) => {
+                self.status = "Selection mixes trash and normal files".to_string();
+            }
+            (true, false) => self.open_trash_prompt_for_explicit_targets(targets, true),
+            _ => self.open_trash_prompt_for_explicit_targets(targets, false),
         }
-        let targets = self
-            .duplicate_action_paths()
+    }
+    fn open_duplicate_delete_permanently_prompt(&mut self) {
+        if let Some(targets) = self.duplicate_trash_targets_or_status(true) {
+            self.open_trash_prompt_for_explicit_targets(targets, true);
+        }
+    }
+    fn duplicate_trash_targets_or_status(&mut self, permanent: bool) -> Option<Vec<TrashTarget>> {
+        if self.duplicate_loading() {
+            self.status = if permanent {
+                "Wait for duplicate scan to finish before deleting results".to_string()
+            } else {
+                "Wait for duplicate scan to finish before trashing results".to_string()
+            };
+            return None;
+        }
+        let action_paths = self.duplicate_action_paths();
+        let targets = action_paths
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_string_lossy().to_string();
@@ -524,9 +553,9 @@ impl App {
             })
             .collect::<Vec<_>>();
         if targets.is_empty() {
-            return;
+            return None;
         }
-        self.open_trash_prompt_for_explicit_targets(targets, false);
+        Some(targets)
     }
     fn duplicate_action_paths(&self) -> Vec<PathBuf> {
         if let Some(overlay) = self
@@ -615,6 +644,37 @@ impl App {
                 }
             }
         }
+        self.refresh_duplicate_preview();
+    }
+
+    pub(in crate::app) fn remove_duplicate_paths(&mut self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let removed = paths.iter().collect::<HashSet<_>>();
+        let Some(overlay) = &mut self.overlays.duplicates else {
+            return;
+        };
+        overlay
+            .selected_paths
+            .retain(|path| !removed.contains(path));
+        if overlay
+            .preview_path
+            .as_ref()
+            .is_some_and(|path| removed.contains(path))
+        {
+            overlay.preview_path = None;
+        }
+        overlay.groups.retain_mut(|group| {
+            group.files.retain(|file| !removed.contains(&file.path));
+            !group.files.is_empty()
+        });
+        if overlay.groups.is_empty() {
+            overlay.selected = 0;
+            overlay.scroll = 0;
+        }
+        self.queue_terminal_image_geometry_clear();
+        self.sync_duplicate_scroll();
         self.refresh_duplicate_preview();
     }
 
@@ -999,6 +1059,295 @@ mod tests {
 
         assert!(app.duplicates_is_open());
         assert!(app.trash_is_open());
+        assert_eq!(app.trash_title(), "Trash 1 selected file?");
+        assert_eq!(app.trash_target_count(), 1);
+        assert_eq!(app.trash_target_path_at(0), Some(Path::new("alpha.txt")));
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_trash_prompt_uses_selected_rows_when_selection_exists() {
+        let root = temp_path("trash-selected-rows");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![
+            duplicate_group(42, 10, &["alpha.txt", "beta.txt"]),
+            duplicate_group(7, 20, &["gamma.txt", "delta.txt"]),
+        ];
+        overlay.loading = false;
+        overlay.selected = 0;
+        overlay.selected_paths.insert(PathBuf::from("beta.txt"));
+        overlay.selected_paths.insert(PathBuf::from("gamma.txt"));
+
+        app.open_duplicate_trash_prompt();
+
+        assert!(app.duplicates_is_open());
+        assert!(app.trash_is_open());
+        assert_eq!(app.trash_target_count(), 2);
+        assert_eq!(app.trash_target_path_at(0), Some(Path::new("beta.txt")));
+        assert_eq!(app.trash_target_path_at(1), Some(Path::new("gamma.txt")));
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_trash_binding_permanently_deletes_when_results_are_inside_trash() {
+        let root = temp_path("duplicate-trash-binding-inside-trash");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.navigation.in_trash = true;
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group_at(
+            &root,
+            42,
+            10,
+            &["alpha.txt", "beta.txt"],
+        )];
+        overlay.loading = false;
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("trash binding should open permanent delete prompt for trash results");
+
+        assert!(app.duplicates_is_open());
+        assert!(app.trash_is_open());
+        assert_eq!(app.trash_title(), "Delete permanently 1 selected file?");
+        assert!(
+            app.overlays
+                .trash
+                .as_ref()
+                .is_some_and(|trash| trash.permanent)
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_trash_binding_blocks_mixed_trash_and_normal_results() {
+        let trash_root = temp_path("duplicate-trash-binding-mixed-trash");
+        let normal_root = temp_path("duplicate-trash-binding-mixed-normal");
+        fs::create_dir_all(&trash_root).expect("failed to create trash temp root");
+        fs::create_dir_all(&normal_root).expect("failed to create normal temp root");
+        let mut app = App::new_at(trash_root.clone()).expect("failed to create app");
+        app.navigation.in_trash = true;
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![
+            duplicate_group_at(&trash_root, 42, 10, &["alpha.txt", "beta.txt"]),
+            duplicate_group_at(&normal_root, 7, 10, &["gamma.txt", "delta.txt"]),
+        ];
+        overlay.loading = false;
+        overlay.selected_paths.insert(trash_root.join("alpha.txt"));
+        overlay.selected_paths.insert(normal_root.join("gamma.txt"));
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .expect("mixed trash binding should be handled");
+
+        assert!(app.duplicates_is_open());
+        assert!(!app.trash_is_open());
+        assert_eq!(
+            app.status_message(),
+            "Selection mixes trash and normal files"
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(trash_root).expect("failed to remove trash temp root");
+        fs::remove_dir_all(normal_root).expect("failed to remove normal temp root");
+    }
+
+    #[test]
+    fn duplicate_finder_uses_normal_action_bindings_even_when_browser_is_in_trash() {
+        let root = temp_path("duplicate-normal-bindings-in-trash");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.navigation.in_trash = true;
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])];
+        overlay.loading = false;
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .expect("rename binding should work inside Duplicate Finder");
+
+        assert!(app.duplicates_is_open());
+        assert!(app.overlays.rename.is_some());
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_permanent_delete_prompt_opens_on_top_after_scan() {
+        let root = temp_path("delete-permanent-on-top");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])];
+        overlay.loading = false;
+
+        app.handle_duplicate_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT))
+            .expect("D should open permanent delete prompt from Duplicate Finder");
+
+        assert!(app.duplicates_is_open());
+        assert!(app.trash_is_open());
+        assert_eq!(app.trash_title(), "Delete permanently 1 selected file?");
+        assert!(
+            app.overlays
+                .trash
+                .as_ref()
+                .is_some_and(|trash| trash.permanent)
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_permanent_delete_keeps_finder_open_and_keeps_singleton_remainder() {
+        let root = temp_path("delete-permanent-removes-rows");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        for name in ["alpha.txt", "beta.txt", "gamma.txt", "delta.txt"] {
+            fs::write(root.join(name), "same").expect("failed to write duplicate file");
+        }
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+        app.jobs.duplicate_token = app.jobs.duplicate_token.wrapping_add(1);
+        app.jobs.scheduler.cancel_duplicate_scan();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![
+            duplicate_group_at(&root, 42, 10, &["alpha.txt", "beta.txt"]),
+            duplicate_group_at(&root, 7, 20, &["gamma.txt", "delta.txt"]),
+        ];
+        overlay.loading = false;
+        overlay.selected_paths.insert(root.join("alpha.txt"));
+
+        app.open_duplicate_delete_permanently_prompt();
+        app.overlays
+            .trash
+            .as_mut()
+            .expect("trash prompt should be open")
+            .confirmed = true;
+        app.handle_trash_key(KeyEvent::from(KeyCode::Enter))
+            .expect("permanent delete should be submitted");
+
+        assert!(app.duplicates_is_open());
+        assert!(!app.trash_is_open());
+
+        for _ in 0..500 {
+            let _ = app.process_background_jobs();
+            if app.trash_progress().is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.trash_progress().is_none());
+
+        assert!(app.duplicates_is_open());
+        assert!(!root.join("alpha.txt").exists());
+        assert_eq!(app.duplicate_file_count(), 3);
+        assert_eq!(app.duplicate_focused_path(), Some(root.join("beta.txt")));
+
+        app.close_duplicate_finder();
+        app.navigation.directory_runtime.watch = None;
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_permanent_delete_waits_for_scan_completion() {
+        let root = temp_path("delete-permanent-loading");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![duplicate_group(42, 10, &["alpha.txt", "beta.txt"])];
+        overlay.loading = true;
+
+        app.open_duplicate_delete_permanently_prompt();
+
+        assert!(app.duplicates_is_open());
+        assert!(!app.trash_is_open());
+        assert_eq!(
+            app.status_message(),
+            "Wait for duplicate scan to finish before deleting results"
+        );
+
+        app.close_duplicate_finder();
+        fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    #[test]
+    fn duplicate_permanent_delete_allows_selected_rows_even_when_they_are_a_whole_group() {
+        let root = temp_path("delete-permanent-whole-group");
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let mut app = App::new_at(root.clone()).expect("failed to create app");
+        app.open_duplicate_finder();
+
+        let overlay = app
+            .overlays
+            .duplicates
+            .as_mut()
+            .expect("duplicate overlay should be open");
+        overlay.groups = vec![
+            duplicate_group(42, 10, &["alpha.txt", "beta.txt"]),
+            duplicate_group(7, 20, &["gamma.txt", "delta.txt"]),
+        ];
+        overlay.loading = false;
+        overlay.selected_paths.insert(PathBuf::from("alpha.txt"));
+        overlay.selected_paths.insert(PathBuf::from("beta.txt"));
+        overlay.selected_paths.insert(PathBuf::from("gamma.txt"));
+
+        app.open_duplicate_delete_permanently_prompt();
+
+        assert!(app.duplicates_is_open());
+        assert!(app.trash_is_open());
+        assert_eq!(app.trash_title(), "Delete permanently 3 files?");
+        assert_eq!(app.trash_target_count(), 3);
+        assert_eq!(app.trash_target_path_at(0), Some(Path::new("alpha.txt")));
+        assert_eq!(app.trash_target_path_at(1), Some(Path::new("beta.txt")));
+        assert_eq!(app.trash_target_path_at(2), Some(Path::new("gamma.txt")));
 
         app.close_duplicate_finder();
         fs::remove_dir_all(root).expect("failed to remove temp root");
@@ -1342,6 +1691,28 @@ mod tests {
 
         app.close_duplicate_finder();
         fs::remove_dir_all(root).expect("failed to remove temp root");
+    }
+
+    fn duplicate_group_at(
+        root: &Path,
+        id: u64,
+        size: u64,
+        names: &[&str],
+    ) -> crate::fs::duplicates::DuplicateGroup {
+        crate::fs::duplicates::DuplicateGroup {
+            id,
+            size,
+            files: names
+                .iter()
+                .map(|name| crate::fs::duplicates::DuplicateFile {
+                    path: root.join(name),
+                    name: (*name).to_string(),
+                    relative: (*name).to_string(),
+                    size,
+                    modified: None,
+                })
+                .collect(),
+        }
     }
 
     fn duplicate_group(

@@ -437,7 +437,14 @@ impl App {
                         // operations leave some entries intact, so using the
                         // pre-computed survivor path would move the cursor
                         // away from entries that are still present.
-                        let next_selection = self.jobs.trash_progress.take().and_then(|p| {
+                        let progress = self.jobs.trash_progress.take();
+                        let duplicate_targets = progress
+                            .as_ref()
+                            .and_then(|p| {
+                                (build.completed == p.total).then(|| p.duplicate_targets.clone())
+                            })
+                            .flatten();
+                        let next_selection = progress.and_then(|p| {
                             (build.completed == p.total)
                                 .then_some(p.next_selection)
                                 .flatten()
@@ -448,6 +455,9 @@ impl App {
                             .take()
                             .unwrap_or_else(|| self.navigation.cwd.clone());
                         let status = build.status.unwrap_or_default();
+                        if let Some(paths) = duplicate_targets.as_ref() {
+                            self.remove_duplicate_paths(paths);
+                        }
                         // Only reload in-place when the user is still in the
                         // source directory and not mid-navigation to somewhere
                         // else (which would cancel their navigation).
