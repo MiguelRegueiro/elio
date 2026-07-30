@@ -258,6 +258,7 @@ https://elio-fm.github.io/docs/configuration/
 |---|---|
 | `f` `*` | Fuzzy-find folders in the current tree |
 | `Ctrl+F` `*` | Fuzzy-find files in the current tree |
+| `Alt+D` `*` | Find duplicate files by content |
 | `z` `*` | Jump with zoxide directory history |
 
 ### File Actions
