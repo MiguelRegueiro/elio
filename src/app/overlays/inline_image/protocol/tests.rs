@@ -44,6 +44,7 @@ impl TerminalEnvGuard {
             "KONSOLE_DBUS_SERVICE",
             "KONSOLE_DBUS_WINDOW",
             "TMUX",
+            "ZELLIJ",
         ];
 
         let saved = VARS
@@ -108,6 +109,33 @@ fn select_image_protocol_ghostty_always_enabled() {
     );
     assert_eq!(
         select_image_protocol(TerminalIdentity::Ghostty, true),
+        ImageProtocol::KittyGraphics
+    );
+}
+
+#[test]
+fn select_image_protocol_uses_direct_kitty_graphics_inside_zellij() {
+    // Mirrors the Zellij compatibility gate in protocol.rs. If Zellij later
+    // supports Kitty Unicode placeholders, this is the test pair to revisit
+    // before removing the direct-path override.
+    assert_eq!(
+        select_image_protocol_with_zellij(TerminalIdentity::Kitty, false, true),
+        ImageProtocol::KittyDirectGraphics
+    );
+    assert_eq!(
+        select_image_protocol_with_zellij(TerminalIdentity::Ghostty, false, true),
+        ImageProtocol::KittyDirectGraphics
+    );
+}
+
+#[test]
+fn select_image_protocol_keeps_normal_kitty_graphics_outside_zellij() {
+    assert_eq!(
+        select_image_protocol_with_zellij(TerminalIdentity::Kitty, false, false),
+        ImageProtocol::KittyGraphics
+    );
+    assert_eq!(
+        select_image_protocol_with_zellij(TerminalIdentity::Ghostty, false, false),
         ImageProtocol::KittyGraphics
     );
 }
