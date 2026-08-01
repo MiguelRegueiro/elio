@@ -282,7 +282,30 @@ pub(in crate::app) fn select_image_protocol(
     identity: TerminalIdentity,
     image_previews_override: bool,
 ) -> ImageProtocol {
+    // Start of Zellij compatibility gate.
+    select_image_protocol_with_zellij(
+        identity,
+        image_previews_override,
+        env::var_os("ZELLIJ").is_some(),
+    )
+}
+
+fn select_image_protocol_with_zellij(
+    identity: TerminalIdentity,
+    image_previews_override: bool,
+    in_zellij: bool,
+) -> ImageProtocol {
     match identity {
+        // Zellij currently implements direct Kitty graphics, but not the Unicode
+        // placeholder extension used by elio's Kitty/Ghostty path. Use direct
+        // placement inside Zellij so previews target the supported protocol subset.
+        //
+        // If Zellij later adds placeholder support, remove this block to let
+        // Kitty/Ghostty inside Zellij fall through to `KittyGraphics`.
+        TerminalIdentity::Kitty | TerminalIdentity::Ghostty if in_zellij => {
+            ImageProtocol::KittyDirectGraphics
+        }
+        // End of Zellij compatibility gate.
         TerminalIdentity::Kitty => ImageProtocol::KittyGraphics,
         TerminalIdentity::Ghostty => ImageProtocol::KittyGraphics,
         // Warp implements the basic Kitty Graphics transmit-and-place protocol
