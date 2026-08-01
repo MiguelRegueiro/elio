@@ -129,6 +129,14 @@ fn select_image_protocol_uses_direct_kitty_graphics_inside_zellij() {
 }
 
 #[test]
+fn select_image_protocol_uses_direct_kitty_graphics_for_wezterm_inside_zellij() {
+    assert_eq!(
+        select_image_protocol_with_zellij(TerminalIdentity::WezTerm, false, true),
+        ImageProtocol::KittyDirectGraphics
+    );
+}
+
+#[test]
 fn select_image_protocol_keeps_normal_kitty_graphics_outside_zellij() {
     assert_eq!(
         select_image_protocol_with_zellij(TerminalIdentity::Kitty, false, false),
