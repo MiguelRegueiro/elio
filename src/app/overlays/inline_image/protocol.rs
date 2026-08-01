@@ -282,7 +282,6 @@ pub(in crate::app) fn select_image_protocol(
     identity: TerminalIdentity,
     image_previews_override: bool,
 ) -> ImageProtocol {
-    // Start of Zellij compatibility gate.
     select_image_protocol_with_zellij(
         identity,
         image_previews_override,
@@ -296,22 +295,19 @@ fn select_image_protocol_with_zellij(
     in_zellij: bool,
 ) -> ImageProtocol {
     match identity {
-        // Zellij currently implements direct Kitty graphics, but not the Unicode
-        // placeholder extension used by elio's Kitty/Ghostty path. Use direct
-        // placement inside Zellij so previews target the supported protocol subset.
-        //
+        // Zellij currently implements Kitty graphics, but not Unicode placeholders.
         // If Zellij later adds placeholder support, remove this block to let
         // Kitty/Ghostty inside Zellij fall through to `KittyGraphics`.
         TerminalIdentity::Kitty | TerminalIdentity::Ghostty if in_zellij => {
             ImageProtocol::KittyDirectGraphics
         }
-        // End of Zellij compatibility gate.
+        // Use Kitty direct placement inside Zellij since it does not support iTerm inline.
+        TerminalIdentity::WezTerm if in_zellij => ImageProtocol::KittyDirectGraphics,
+
         TerminalIdentity::Kitty => ImageProtocol::KittyGraphics,
         TerminalIdentity::Ghostty => ImageProtocol::KittyGraphics,
-        // Warp implements the basic Kitty Graphics transmit-and-place protocol
-        // but not the Unicode placeholder extension that the `KittyGraphics`
-        // path emits (`U=1`). Route Warp through `KittyDirectGraphics`, which uses
-        // direct CSI cursor placement and matches what Warp actually renders.
+        // Warp supports direct Kitty graphics, but not Unicode placeholders.
+        // Use Kitty direct placement instead of elio's `KittyGraphics` path.
         TerminalIdentity::Warp => ImageProtocol::KittyDirectGraphics,
         TerminalIdentity::Konsole => ImageProtocol::KittyDirectGraphics,
         TerminalIdentity::WezTerm | TerminalIdentity::ITerm2 => ImageProtocol::ItermInline,
