@@ -1681,8 +1681,16 @@ fn chooser_help_overlay_uses_chooser_actions_without_changing_esc() {
         "expected chooser help title, got: {rendered:?}"
     );
     assert!(
-        rendered.contains("confirm selection"),
+        rendered.contains("choose"),
         "expected chooser help to list choose action, got: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("enter folder / choose"),
+        "expected chooser double-click help to fit on one line, got: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("enter folder / open"),
+        "expected chooser help to hide the fully shadowed open-or-enter action, got: {rendered:?}"
     );
     assert!(
         rendered.contains("cancel chooser"),
