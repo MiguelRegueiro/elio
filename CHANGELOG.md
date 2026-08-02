@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Changed preview scroll defaults from `[` / `]` to `Shift+arrows`; `H/J/K/L` remain unchanged.
+- Changed chooser-mode double-clicks to enter folders and choose files.
 
 ### Fixed
 

@@ -76,7 +76,7 @@ pub(super) fn render_help(
         e(
             "Double-click",
             if mode.is_chooser() {
-                "confirm clicked item"
+                "enter folder / choose file"
             } else {
                 "open item"
             },

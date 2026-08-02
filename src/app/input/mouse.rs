@@ -126,18 +126,18 @@ impl App {
                     .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
                     .cloned()
                 {
-                    let Some(path) = self
+                    let Some((path, is_dir)) = self
                         .navigation
                         .entries
                         .get(hit.index)
-                        .map(|entry| entry.path.clone())
+                        .map(|entry| (entry.path.clone(), entry.is_dir()))
                     else {
                         return Ok(());
                     };
                     self.remember_drag_candidate(path.clone());
                     self.select_index(hit.index);
                     if self.is_double_click(&path) {
-                        if self.chooser_mode {
+                        if self.chooser_mode && !is_dir {
                             self.confirm_chooser_path(&path);
                         } else {
                             self.open_entry_at_index(hit.index)?;
