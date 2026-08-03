@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed image previews bleeding through archive creation popups in transparent themes.
 - Fixed image previews disappearing after returning from actions that suspend and restore the TUI.
 - Fixed pasted text being handled as normal keystrokes.
+- Fixed stretched image previews in Kitty graphics environments that do not preserve placeholder aspect ratios. ([#267])
 
 ## [1.11.2] - 2026-07-22
 
@@ -327,6 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.1.0]: https://github.com/elio-fm/elio/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/elio-fm/elio/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/elio-fm/elio/releases/tag/v1.0.0
+[#267]: https://github.com/elio-fm/elio/issues/267
 [#258]: https://github.com/elio-fm/elio/issues/258
 [#251]: https://github.com/elio-fm/elio/issues/251
 [#241]: https://github.com/elio-fm/elio/issues/241

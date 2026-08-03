@@ -247,19 +247,15 @@ impl App {
         dimensions: RenderedImageDimensions,
         window_size: TerminalWindowSize,
     ) -> Rect {
-        // Kitty unicode placeholders fill the entire cell area and let the
-        // terminal handle scaling, so no fitting is needed. Konsole direct
-        // placements, iTerm2, and Sixel all need a cell area that already
-        // matches the image's aspect ratio.
-        if self.preview.terminal_images.protocol == ImageProtocol::KittyGraphics {
-            request.area
-        } else {
-            fit_image_area(
-                request.area,
-                window_size,
-                dimensions.width_px as f32 / dimensions.height_px as f32,
-            )
-        }
+        // Fit the placeholder grid as well as direct raster placements. Native
+        // Kitty can preserve aspect ratio within an arbitrary grid, but an
+        // aspect-correct grid also survives graphics proxies that materialize
+        // Unicode placeholders as a direct placement.
+        fit_image_area(
+            request.area,
+            window_size,
+            dimensions.width_px as f32 / dimensions.height_px as f32,
+        )
     }
 
     /// Place a static image using the active protocol.
