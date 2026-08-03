@@ -34,17 +34,19 @@ A brief overview of the repository layout:
 ├── packaging/                  # Distribution packaging files
 ├── src/
 │   ├── app/                    # Application state, jobs, and user actions
+│   ├── archive/                # Archive creation, extraction, and format handling
 │   ├── config/                 # Config and theme loading/parsing
 │   ├── core/                   # Shared model types used across layers
 │   ├── file_info/              # File classification and metadata discovery
 │   ├── fs/                     # Filesystem access and path-level operations
 │   ├── preview/                # Preview construction and preview-specific tests
 │   ├── runtime/                # App runner, terminal lifecycle, drawing, and session output
+│   ├── shell_integration/       # Shell scripts and install/uninstall support
 │   ├── ui/                     # Terminal rendering, layout, theming, and interaction
+│   ├── cli.rs                  # Command-line parsing and command dispatch
 │   ├── lib.rs                  # Public library API entrypoints
 │   └── main.rs                 # Binary entrypoint
-├── tests/
-│   └── architecture_guardrails.rs  # Enforced dependency-boundary checks
+├── tests/                      # Integration tests and architecture guardrails
 ├── build.rs                    # Build-time asset preparation
 ├── CHANGELOG.md                # Release notes and unreleased user-facing changes
 ├── CONTRIBUTING.md             # Contributor guide
@@ -75,7 +77,7 @@ For configuration and theme work, use the examples in
 
 ## Local Checks
 
-Before opening a pull request, run the same checks expected by CI:
+Before opening a pull request, run:
 
 ```bash
 cargo fmt --check

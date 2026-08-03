@@ -28,9 +28,9 @@ When reporting, please include:
   terminal escape sequence
 - whether the issue depends on optional external preview tools
 
-We aim to acknowledge new reports within 7 days. Reports will be triaged, and
-confirmed vulnerabilities will be fixed and disclosed with appropriate release
-notes once a fix is available.
+Reports will be reviewed and triaged as promptly as practical. Confirmed
+vulnerabilities will be addressed based on their severity and impact, with fixes
+and disclosures coordinated as appropriate.
 
 ## Project Security Scope
 
