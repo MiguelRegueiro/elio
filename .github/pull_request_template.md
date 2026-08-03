@@ -2,18 +2,6 @@
 
 <!-- What does this PR change and why? Keep it concise. -->
 
-## What Changed
-
-<!-- Use bullets for the main implementation changes. Focus on key points. -->
-
-## User Impact
-
-<!-- Describe the visible behavior change. For internal-only changes, use "No user-visible behavior change." -->
-
-## Notes
-
-<!-- Optional: mention design decisions, follow-up work, compatibility details, or platform-specific behavior. Delete this section if it is not needed. -->
-
 ## Testing
 
 Verified with:
@@ -26,16 +14,7 @@ Verified with:
 
 Manual checks:
 
-<!-- If this affects preview behavior, file classification, platform integration, optional tools, UI/layout, or themes:
-
-- Mention OS, terminal, and any relevant tools
-- Describe what you tested
-- Include screenshots or recordings when useful
--->
-
-Result:
-
-<!-- Example: All checks passed locally. -->
+<!-- List the manual checks performed. Include relevant details, such as the OS, terminal, multiplexer, or external tools used, and the behavior verified in each. -->
 
 ## Documentation and Changelog
 
