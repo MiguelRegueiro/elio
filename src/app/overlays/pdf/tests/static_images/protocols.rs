@@ -38,22 +38,28 @@ fn current_extensionless_png_uses_direct_kitty_source_overlay() {
 }
 
 #[test]
-fn prepared_full_pane_image_uses_full_pane_kitty_placement() {
+fn prepared_full_pane_image_uses_aspect_fitted_kitty_placement() {
     let root = temp_root("image-placement-from-rendered-png");
     fs::create_dir_all(&root).expect("failed to create temp root");
     let mut app = App::new_at(root.clone()).expect("app should initialize");
     app.preview.terminal_images.protocol = ImageProtocol::KittyGraphics;
     app.preview.terminal_images.window = Some(TerminalWindowSize {
-        cells_width: 100,
-        cells_height: 50,
-        pixels_width: 1000,
-        pixels_height: 1000,
+        cells_width: 73,
+        cells_height: 52,
+        pixels_width: 657,
+        pixels_height: 936,
     });
     app.preview.pdf.pdf_tools_available = true;
 
     let path = root.join("photo.jpg");
     write_test_raster_image(&path, ImageFormat::Jpeg, 1600, 900);
     set_single_test_entry(&mut app, &path);
+    app.input.frame_state.preview_content_area = Some(Rect {
+        x: 46,
+        y: 2,
+        width: 25,
+        height: 48,
+    });
     app.refresh_preview();
 
     let request = app
@@ -61,7 +67,7 @@ fn prepared_full_pane_image_uses_full_pane_kitty_placement() {
         .expect("image request should be available");
     let metadata = fs::metadata(&path).expect("image metadata should exist");
     let rendered = root.join("photo-rendered.png");
-    write_test_raster_image(&rendered, ImageFormat::Png, 250, 540);
+    write_test_raster_image(&rendered, ImageFormat::Png, 1024, 1024);
 
     let dirty = app.apply_image_prepare_build(crate::app::jobs::ImagePrepareBuild {
         path: path.clone(),
@@ -75,8 +81,8 @@ fn prepared_full_pane_image_uses_full_pane_kitty_placement() {
         result: Some(crate::app::overlays::images::PreparedStaticImageAsset {
             display_path: rendered,
             dimensions: RenderedImageDimensions {
-                width_px: 250,
-                height_px: 540,
+                width_px: 1024,
+                height_px: 1024,
             },
             inline_payload: None,
             sixel_dcs: None,
@@ -93,8 +99,10 @@ fn prepared_full_pane_image_uses_full_pane_kitty_placement() {
             .expect("presenting prepared jpeg overlay should not fail"),
     )
     .expect("kitty output should be utf8");
-    assert!(output.contains(&format!("c={}", request.area.width)));
-    assert!(output.contains(&format!("r={}", request.area.height)));
+    assert!(output.contains("c=25"));
+    assert!(output.contains("r=13"));
+    assert!(output.contains("\x1b[20;47H"));
+    assert_eq!(app.displayed_static_image_clear_area(), Some(request.area));
 
     fs::remove_dir_all(root).expect("failed to remove temp root");
 }
