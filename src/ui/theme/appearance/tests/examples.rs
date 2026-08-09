@@ -8,6 +8,7 @@ const ALTERNATE_EXAMPLE_THEME_NAMES: &[&str] = &[
     "amber-dusk",
     "catppuccin-mocha",
     "tokyo-night",
+    "nord",
     "navi",
     "neon-cherry",
     "terminal-ansi",
@@ -49,6 +50,7 @@ fn alternate_example_theme_config(name: &str) -> &'static str {
             include_str!("../../../../../examples/themes/catppuccin-mocha/theme.toml")
         }
         "tokyo-night" => include_str!("../../../../../examples/themes/tokyo-night/theme.toml"),
+        "nord" => include_str!("../../../../../examples/themes/nord/theme.toml"),
         "navi" => include_str!("../../../../../examples/themes/navi/theme.toml"),
         "neon-cherry" => include_str!("../../../../../examples/themes/neon-cherry/theme.toml"),
         "terminal-ansi" => include_str!("../../../../../examples/themes/terminal-ansi/theme.toml"),
@@ -354,6 +356,37 @@ fn tokyo_night_example_theme_parses_as_user_theme_and_applies_palette_consistent
     assert_eq!(readme.class, FileClass::Document);
     assert_eq!(readme.icon, "");
     assert_eq!(readme.color, rgb(0xe0, 0xaf, 0x68));
+}
+
+#[test]
+fn nord_example_theme_parses_as_user_theme_and_applies_palette_consistently() {
+    let theme = load_alternate_example_theme("nord");
+
+    assert_eq!(theme.palette.bg, rgb(0x2e, 0x34, 0x40));
+    assert_eq!(theme.palette.chrome_alt, rgb(0x2b, 0x30, 0x3c));
+    assert_eq!(theme.palette.path_bg, rgb(0x34, 0x3b, 0x49));
+    assert_eq!(theme.palette.selected_bg, rgb(0x4c, 0x56, 0x6a));
+    assert_eq!(theme.palette.grid_selection_band, rgb(0x87, 0x58, 0x49));
+    assert_eq!(theme.palette.grid_yank_band, rgb(0x5a, 0x69, 0x4d));
+    assert_eq!(theme.palette.grid_cut_band, rgb(0x99, 0x4e, 0x55));
+    assert_eq!(theme.palette.accent, rgb(0x88, 0xc0, 0xd0));
+    assert_eq!(theme.preview.code.line_number, rgb(0x73, 0x7f, 0x97));
+    assert_eq!(theme.preview.code.keyword, rgb(0x81, 0xa1, 0xc1));
+    assert_eq!(theme.preview.code.string, rgb(0xa3, 0xbe, 0x8c));
+
+    let directory = theme.resolve(Path::new("projects"), EntryKind::Directory);
+    assert_eq!(directory.class, FileClass::Directory);
+    assert_eq!(directory.icon, "󰉋");
+    assert_eq!(directory.color, rgb(0x88, 0xc0, 0xd0));
+
+    let rust = theme.resolve(Path::new("main.rs"), EntryKind::File);
+    assert_eq!(rust.class, FileClass::Code);
+    assert_eq!(rust.icon, "");
+    assert_eq!(rust.color, rgb(0xd0, 0x87, 0x70));
+
+    let image = theme.resolve(Path::new("logo.png"), EntryKind::File);
+    assert_eq!(image.class, FileClass::Image);
+    assert_eq!(image.color, rgb(0xa3, 0xbe, 0x8c));
 }
 
 #[test]
