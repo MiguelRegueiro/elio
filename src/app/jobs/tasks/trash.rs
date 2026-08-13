@@ -315,9 +315,24 @@ fn run_permanent_delete(
 /// risk of a false positive from a file whose base name happens to embed the
 /// same number.  The parent dir (`cleanup/`) is on the same filesystem as the
 /// home trash so `rename(2)` never crosses a device boundary.
+fn staging_root_for(data_dir: Option<PathBuf>, effective_uid: u32) -> Option<PathBuf> {
+    if effective_uid == 0 {
+        return None;
+    }
+    data_dir.map(|dir| dir.join("elio").join("cleanup"))
+}
+
+fn staging_root() -> Option<PathBuf> {
+    #[cfg(unix)]
+    let effective_uid = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let effective_uid = 1;
+    staging_root_for(dirs::data_dir(), effective_uid)
+}
+
 fn staging_dir() -> Option<PathBuf> {
     let pid = std::process::id();
-    dirs::data_dir().map(|d| d.join("elio").join("cleanup").join(pid.to_string()))
+    staging_root().map(|root| root.join(pid.to_string()))
 }
 
 /// Atomically moves `path` into `staging`, giving it a unique name.
@@ -390,7 +405,7 @@ fn run_staged_cleanup(staged: Vec<(String, PathBuf)>) -> Vec<String> {
 /// Best-effort: errors are silently ignored.
 pub(in crate::app::jobs) fn sweep_staging_on_startup() {
     let current_pid = std::process::id();
-    let Some(cleanup_root) = dirs::data_dir().map(|d| d.join("elio").join("cleanup")) else {
+    let Some(cleanup_root) = staging_root() else {
         return;
     };
     // If cleanup_root/{current_pid}/ already exists at startup it must be a
