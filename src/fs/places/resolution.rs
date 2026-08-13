@@ -3,6 +3,8 @@ use crate::{
     config::{BuiltinPlace, PlaceEntrySpec, PlacesConfig},
     core::{SidebarItem, SidebarItemKind, SidebarRow},
 };
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+use std::{collections::HashMap, ffi::OsString, os::unix::ffi::OsStringExt};
 use std::{
     collections::HashSet,
     fs,
@@ -36,13 +38,13 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn build_sidebar_rows() -> Vec<SidebarRow> {
-    let home = home_dir().unwrap_or_else(|| {
+    let home = crate::config::invoking_user_home_dir().unwrap_or_else(|| {
         #[cfg(windows)]
         return PathBuf::from("C:\\");
         #[cfg(not(windows))]
         return PathBuf::from("/");
     });
-    let context = system_place_resolution_context(home);
+    let context = system_place_resolution_context(home, dirs::home_dir());
     build_sidebar_rows_with_context(crate::config::places(), &context)
 }
 
@@ -71,22 +73,148 @@ pub(super) fn build_sidebar_rows_with_context(
     rows
 }
 
-fn system_place_resolution_context(home: PathBuf) -> PlaceResolutionContext {
+fn system_place_resolution_context(
+    home: PathBuf,
+    process_home: Option<PathBuf>,
+) -> PlaceResolutionContext {
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+    let user_dirs = if process_home.as_deref() != Some(&home) {
+        read_user_dirs(&home)
+    } else {
+        Default::default()
+    };
+    #[cfg(any(not(unix), target_os = "macos", target_os = "ios"))]
+    let user_dirs = ();
+
+    let personal_dir = |current, key, fallback| {
+        resolve_personal_dir(
+            &home,
+            process_home.as_deref(),
+            current,
+            configured_user_dir(&user_dirs, key),
+            platform_personal_dir_fallback(fallback),
+        )
+    };
+
     PlaceResolutionContext {
-        desktop: dirs::desktop_dir().filter(|path| path.exists()),
-        documents: dirs::document_dir().filter(|path| path.exists()),
-        downloads: dirs::download_dir().filter(|path| path.exists()),
-        pictures: dirs::picture_dir().filter(|path| path.exists()),
-        music: dirs::audio_dir().filter(|path| path.exists()),
-        videos: dirs::video_dir().filter(|path| path.exists()),
+        desktop: personal_dir(dirs::desktop_dir(), "DESKTOP", "Desktop"),
+        documents: personal_dir(dirs::document_dir(), "DOCUMENTS", "Documents"),
+        downloads: personal_dir(dirs::download_dir(), "DOWNLOAD", "Downloads"),
+        pictures: personal_dir(dirs::picture_dir(), "PICTURES", "Pictures"),
+        music: personal_dir(dirs::audio_dir(), "MUSIC", "Music"),
+        videos: personal_dir(
+            dirs::video_dir(),
+            "VIDEOS",
+            if cfg!(target_os = "macos") {
+                "Movies"
+            } else {
+                "Videos"
+            },
+        ),
         root: if cfg!(unix) {
             Some(PathBuf::from("/"))
         } else {
             None
         },
-        trash: trash_dir(&home),
+        trash: process_home.as_deref().and_then(trash_dir),
         home,
     }
+}
+
+pub(super) fn resolve_personal_dir(
+    home: &Path,
+    process_home: Option<&Path>,
+    current: Option<PathBuf>,
+    configured: Option<PathBuf>,
+    fallback: Option<&str>,
+) -> Option<PathBuf> {
+    if process_home == Some(home) {
+        current
+    } else {
+        configured.or_else(|| fallback.map(|fallback| home.join(fallback)))
+    }
+    .filter(|path| path.exists())
+}
+
+#[cfg(any(not(unix), target_os = "macos", target_os = "ios"))]
+fn platform_personal_dir_fallback(fallback: &str) -> Option<&str> {
+    Some(fallback)
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn platform_personal_dir_fallback(_fallback: &str) -> Option<&str> {
+    None
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn configured_user_dir(user_dirs: &HashMap<String, PathBuf>, key: &str) -> Option<PathBuf> {
+    user_dirs.get(key).cloned()
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn read_user_dirs(home: &Path) -> HashMap<String, PathBuf> {
+    let Ok(contents) = fs::read(home.join(".config/user-dirs.dirs")) else {
+        return HashMap::new();
+    };
+    contents
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| parse_user_dir(line, home))
+        .collect()
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+pub(super) fn parse_user_dir(line: &[u8], home: &Path) -> Option<(String, PathBuf)> {
+    let separator = line.iter().position(|byte| *byte == b'=')?;
+    let (key, value) = (&line[..separator], &line[separator + 1..]);
+    let key = trim_ascii(key);
+    let key = key.strip_prefix(b"XDG_")?.strip_suffix(b"_DIR")?;
+    let key = std::str::from_utf8(key).ok()?.to_string();
+    let value = trim_ascii(value).strip_prefix(b"\"")?;
+    let (base, value) = if let Some(relative) = value.strip_prefix(b"$HOME/") {
+        (Some(home), relative)
+    } else if value.starts_with(b"/") {
+        (None, value)
+    } else {
+        return None;
+    };
+    let value = OsString::from_vec(unescape_quoted_user_dir(value)?);
+    if value.is_empty() {
+        return None;
+    }
+    let path = base.map_or_else(|| PathBuf::from(&value), |base| base.join(&value));
+    Some((key, path))
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn trim_ascii(value: &[u8]) -> &[u8] {
+    let start = value
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+        .unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+        .map_or(start, |index| index + 1);
+    &value[start..end]
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+fn unescape_quoted_user_dir(value: &[u8]) -> Option<Vec<u8>> {
+    let mut unescaped = Vec::with_capacity(value.len());
+    let mut bytes = value.iter().copied();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'"' => return Some(unescaped),
+            b'\\' => unescaped.push(bytes.next()?),
+            _ => unescaped.push(byte),
+        }
+    }
+    None
+}
+
+#[cfg(any(not(unix), target_os = "macos", target_os = "ios"))]
+fn configured_user_dir(_user_dirs: &(), _key: &str) -> Option<PathBuf> {
+    None
 }
 
 fn build_pinned_sidebar_items(

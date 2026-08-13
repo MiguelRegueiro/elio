@@ -203,9 +203,10 @@ impl BuiltinPlace {
 
 pub(super) fn expand_custom_place_path(path: &str) -> anyhow::Result<PathBuf> {
     let expanded = if path == "~" {
-        crate::fs::home_dir().ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
+        super::invoking_user_home_dir()
+            .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
     } else if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
-        crate::fs::home_dir()
+        super::invoking_user_home_dir()
             .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?
             .join(rest)
     } else {

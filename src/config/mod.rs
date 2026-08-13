@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 pub(crate) use self::{
     goto::{BuiltinGoto, GotoConfig, GotoEntrySpec},
+    invoking_user::home_dir as invoking_user_home_dir,
     keys::{Action, ChooserKeyAction, KeyBindings, KeyContext, KeyList, normalized_plain_key_char},
     layout::{LayoutConfig, PaneWeights},
     loading::config_dir,
