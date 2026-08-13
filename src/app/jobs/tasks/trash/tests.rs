@@ -21,6 +21,21 @@ fn path_refs(paths: &[PathBuf]) -> Vec<&Path> {
     paths.iter().map(|path| path.as_path()).collect()
 }
 
+#[test]
+fn root_permanent_delete_does_not_stage_in_user_data_dir() {
+    let data_dir = PathBuf::from("/home/paco/.local/share");
+    assert_eq!(staging_root_for(Some(data_dir), 0), None);
+}
+
+#[test]
+fn normal_permanent_delete_keeps_existing_staging_root() {
+    let data_dir = PathBuf::from("/home/paco/.local/share");
+    assert_eq!(
+        staging_root_for(Some(data_dir.clone()), 1000),
+        Some(data_dir.join("elio/cleanup"))
+    );
+}
+
 // ── GIO trash backend ─────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
