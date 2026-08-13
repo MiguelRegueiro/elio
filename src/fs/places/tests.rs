@@ -1,4 +1,8 @@
-use super::resolution::{PlaceResolutionContext, build_sidebar_rows_with_context};
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+use super::resolution::parse_user_dir;
+use super::resolution::{
+    PlaceResolutionContext, build_sidebar_rows_with_context, resolve_personal_dir,
+};
 use crate::{
     config::{BuiltinPlace, PlaceEntrySpec, PlacesConfig},
     core::{SidebarItemKind, SidebarRow},
@@ -34,6 +38,130 @@ fn context_for(root: &Path) -> PlaceResolutionContext {
         root: None,
         trash: Some(trash),
     }
+}
+
+#[test]
+fn personal_dir_uses_current_resolution_for_normal_sessions() {
+    let home = temp_path("normal-home");
+    let localized = home.join("Descargas");
+    fs::create_dir_all(&localized).expect("failed to create localized place");
+
+    assert_eq!(
+        resolve_personal_dir(
+            &home,
+            Some(&home),
+            Some(localized.clone()),
+            None,
+            Some("Downloads"),
+        ),
+        Some(localized)
+    );
+
+    fs::remove_dir_all(home).expect("failed to remove temp home");
+}
+
+#[test]
+fn personal_dir_uses_invoking_home_when_process_home_differs() {
+    let root = temp_path("elevated-home");
+    let home = root.join("paco");
+    let downloads = home.join("Downloads");
+    fs::create_dir_all(&downloads).expect("failed to create invoking-user downloads");
+
+    assert_eq!(
+        resolve_personal_dir(
+            &home,
+            Some(Path::new("/root")),
+            Some(PathBuf::from("/root/Downloads")),
+            None,
+            Some("Downloads"),
+        ),
+        Some(downloads)
+    );
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn personal_dir_prefers_invoking_users_configured_directory() {
+    let root = temp_path("configured-home");
+    let home = root.join("paco");
+    let downloads = home.join("Descargas");
+    fs::create_dir_all(&downloads).expect("failed to create configured downloads");
+
+    assert_eq!(
+        resolve_personal_dir(
+            &home,
+            Some(Path::new("/root")),
+            Some(PathBuf::from("/root/Downloads")),
+            Some(downloads.clone()),
+            Some("Downloads"),
+        ),
+        Some(downloads)
+    );
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn personal_dir_does_not_invent_missing_elevated_unix_place() {
+    let root = temp_path("missing-place");
+    let home = root.join("paco");
+    let downloads = home.join("Downloads");
+    fs::create_dir_all(&downloads).expect("failed to create conventional downloads");
+
+    assert_eq!(
+        resolve_personal_dir(
+            &home,
+            Some(Path::new("/root")),
+            Some(PathBuf::from("/root/Downloads")),
+            None,
+            None,
+        ),
+        None
+    );
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+#[test]
+fn user_dir_parser_handles_home_relative_absolute_and_escaped_paths() {
+    let home = Path::new("/home/paco");
+    assert_eq!(
+        parse_user_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/Descargas\"", home),
+        Some(("DOWNLOAD".to_string(), home.join("Descargas")))
+    );
+    assert_eq!(
+        parse_user_dir(b"XDG_DOCUMENTS_DIR=\"/srv/paco/docs\"", home),
+        Some(("DOCUMENTS".to_string(), PathBuf::from("/srv/paco/docs")))
+    );
+    assert_eq!(
+        parse_user_dir(b"XDG_MUSIC_DIR=\"$HOME/My\\ Music\"", home),
+        Some(("MUSIC".to_string(), home.join("My Music")))
+    );
+    assert_eq!(
+        parse_user_dir(b"XDG_PICTURES_DIR=\"$HOME/My\\\" Photos\" # comment", home),
+        Some(("PICTURES".to_string(), home.join("My\" Photos")))
+    );
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+#[test]
+fn user_dir_parser_rejects_disabled_relative_and_malformed_paths() {
+    let home = Path::new("/home/paco");
+    assert_eq!(parse_user_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/\"", home), None);
+    assert_eq!(
+        parse_user_dir(b"XDG_DOWNLOAD_DIR=\"Downloads\"", home),
+        None
+    );
+    assert_eq!(
+        parse_user_dir(b"XDG_DOWNLOAD_DIR=$HOME/Downloads", home),
+        None
+    );
+    assert_eq!(
+        parse_user_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/broken\\\"", home),
+        None
+    );
 }
 
 #[test]

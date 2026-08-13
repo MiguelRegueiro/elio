@@ -9,7 +9,7 @@ use std::{
 };
 
 #[cfg(unix)]
-pub(super) fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     elevated_home_dir(
         unsafe { libc::geteuid() },
         env::var_os("SUDO_UID").as_deref(),
@@ -19,7 +19,7 @@ pub(super) fn home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(not(unix))]
-pub(super) fn home_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir()
 }
 

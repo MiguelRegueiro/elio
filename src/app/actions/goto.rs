@@ -184,7 +184,7 @@ fn builtin_goto_destination(
         ),
         BuiltinGoto::Home => (
             "home",
-            crate::fs::home_dir()
+            crate::config::invoking_user_home_dir()
                 .map(GoToDestination::Path)
                 .unwrap_or_else(|| GoToDestination::Missing("Home not available".to_string())),
         ),
@@ -230,7 +230,6 @@ fn downloads_destination(app: &App) -> Option<PathBuf> {
         .filter_map(|row| row.item())
         .find(|item| item.kind == SidebarItemKind::Downloads)
         .map(|item| item.path.clone())
-        .or_else(|| crate::fs::home_dir().map(|home| home.join("Downloads")))
         .filter(|path| path.exists())
 }
 
