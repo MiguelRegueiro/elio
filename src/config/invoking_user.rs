@@ -15,6 +15,7 @@ pub(crate) struct InvokingUser {
     pub(crate) gid: libc::gid_t,
     pub(crate) name: OsString,
     pub(crate) home: PathBuf,
+    pub(crate) shell: OsString,
     pub(crate) groups: Vec<libc::gid_t>,
     pub(crate) xdg_data_home: Option<PathBuf>,
 }
@@ -157,6 +158,11 @@ fn passwd(
         }
         let home = unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes();
         let name = unsafe { CStr::from_ptr(record.pw_name) }.to_bytes();
+        let shell = if record.pw_shell.is_null() {
+            &[][..]
+        } else {
+            unsafe { CStr::from_ptr(record.pw_shell) }.to_bytes()
+        };
         if home.is_empty() || name.is_empty() {
             return None;
         }
@@ -165,6 +171,11 @@ fn passwd(
             gid: record.pw_gid,
             name: OsString::from_vec(name.to_vec()),
             home: PathBuf::from(OsString::from_vec(home.to_vec())),
+            shell: if shell.is_empty() {
+                OsString::from("/bin/sh")
+            } else {
+                OsString::from_vec(shell.to_vec())
+            },
             groups: vec![record.pw_gid],
             xdg_data_home: None,
         });
@@ -310,6 +321,7 @@ mod tests {
         assert_eq!(actual.uid, expected.uid);
         assert_eq!(actual.gid, expected.gid);
         assert_eq!(actual.home, expected.home);
+        assert_eq!(actual.shell, expected.shell);
         assert!(actual.groups.contains(&actual.gid));
     }
 

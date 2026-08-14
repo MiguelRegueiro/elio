@@ -31,26 +31,54 @@ pub(crate) fn run_in_current_terminal(cwd: &Path) -> Result<(), String> {
     ensure_cwd_exists(cwd)?;
     let cwd_label = crate::path_display::user_facing(cwd);
 
+    #[cfg(unix)]
+    let (invocations, invoking_user) = unix_shell_launch(
+        crate::config::invoking_user_context(),
+        std::env::var_os("SHELL"),
+    )?;
+    #[cfg(not(unix))]
     let invocations = shell_invocations();
     let tried: Vec<String> = invocations.iter().map(ShellInvocation::label).collect();
 
-    print_shell_banner(&cwd_label)?;
+    #[cfg(unix)]
+    print_shell_banner(
+        &cwd_label,
+        invoking_user.as_ref().map(|user| user.name.as_os_str()),
+    )?;
+    #[cfg(not(unix))]
+    print_shell_banner(&cwd_label, None)?;
+
     for invocation in invocations {
-        match Command::new(&invocation.program)
-            .args(&invocation.args)
-            .current_dir(cwd)
-            .env("ELIO_SHELL", "1")
-            .env(
-                "ELIO_LEVEL",
-                next_shell_level(std::env::var_os("ELIO_LEVEL")),
-            )
-            .status()
-        {
+        let mut command = Command::new(&invocation.program);
+        command.args(&invocation.args).env("ELIO_SHELL", "1").env(
+            "ELIO_LEVEL",
+            next_shell_level(std::env::var_os("ELIO_LEVEL")),
+        );
+
+        #[cfg(unix)]
+        if let Some(user) = &invoking_user {
+            crate::invoking_user_command::prepare(&mut command, user, Some(cwd)).map_err(
+                |error| format!("Could not prepare shell as invoking user in {cwd_label}: {error}"),
+            )?;
+        } else {
+            command.current_dir(cwd);
+        }
+        #[cfg(not(unix))]
+        command.current_dir(cwd);
+
+        match command.status() {
             Ok(_) => return Ok(()),
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 ensure_cwd_exists(cwd)?;
             }
             Err(error) => {
+                #[cfg(unix)]
+                if let Some(user) = &invoking_user {
+                    return Err(format!(
+                        "Could not open shell as {} in {cwd_label}: {error}",
+                        user.name.to_string_lossy()
+                    ));
+                }
                 return Err(format!("Could not open shell in {cwd_label}: {error}"));
             }
         }
@@ -62,7 +90,7 @@ pub(crate) fn run_in_current_terminal(cwd: &Path) -> Result<(), String> {
     ))
 }
 
-fn print_shell_banner(cwd_label: &str) -> Result<(), String> {
+fn print_shell_banner(cwd_label: &str, user: Option<&std::ffi::OsStr>) -> Result<(), String> {
     let mut stdout = io::stdout();
     let (label_style, value_style, dim_style, reset_style) = if shell_banner_color_enabled() {
         ("\x1b[1;36m", "\x1b[1m", "\x1b[2m", "\x1b[0m")
@@ -70,21 +98,26 @@ fn print_shell_banner(cwd_label: &str) -> Result<(), String> {
         ("", "", "", "")
     };
 
-    writeln!(
-        stdout,
-        "{label_style}elio:{reset_style} opened shell in {value_style}{}{reset_style}",
-        cwd_label
-    )
-    .and_then(|()| {
-        writeln!(
-            stdout,
-            "{dim_style}return:{reset_style} {}",
-            shell_return_hint()
-        )
-    })
-    .and_then(|()| writeln!(stdout))
-    .and_then(|()| stdout.flush())
-    .map_err(|error| format!("Could not prepare shell in {cwd_label}: {error}"))
+    let opened = match user {
+        Some(user) => format!(
+            "{label_style}elio:{reset_style} opened shell as {value_style}{}{reset_style} in {value_style}{cwd_label}{reset_style}",
+            user.to_string_lossy()
+        ),
+        None => format!(
+            "{label_style}elio:{reset_style} opened shell in {value_style}{cwd_label}{reset_style}"
+        ),
+    };
+    writeln!(stdout, "{opened}")
+        .and_then(|()| {
+            writeln!(
+                stdout,
+                "{dim_style}return:{reset_style} {}",
+                shell_return_hint()
+            )
+        })
+        .and_then(|()| writeln!(stdout))
+        .and_then(|()| stdout.flush())
+        .map_err(|error| format!("Could not prepare shell in {cwd_label}: {error}"))
 }
 
 fn shell_banner_color_enabled() -> bool {
@@ -104,15 +137,26 @@ fn shell_return_hint() -> &'static str {
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn shell_invocations() -> Vec<ShellInvocation> {
-    #[cfg(windows)]
-    {
-        windows_shell_invocations(std::env::var_os("COMSPEC"))
-    }
+    windows_shell_invocations(std::env::var_os("COMSPEC"))
+}
 
-    #[cfg(not(windows))]
-    {
-        unix_shell_invocations(std::env::var_os("SHELL"))
+#[cfg(unix)]
+fn unix_shell_launch(
+    context: crate::config::InvocationContext,
+    inherited_shell: Option<OsString>,
+) -> Result<(Vec<ShellInvocation>, Option<crate::config::InvokingUser>), String> {
+    match context {
+        crate::config::InvocationContext::Normal => {
+            Ok((unix_shell_invocations(inherited_shell), None))
+        }
+        crate::config::InvocationContext::Elevated(user) => {
+            Ok((unix_shell_invocations(Some(user.shell.clone())), Some(user)))
+        }
+        crate::config::InvocationContext::ElevatedUnresolved => {
+            Err("Could not resolve invoking user; shell was not opened".to_string())
+        }
     }
 }
 
@@ -232,6 +276,49 @@ mod tests {
                 program: OsString::from("/bin/sh"),
                 args: Vec::new(),
             }]
+        );
+    }
+
+    #[cfg(unix)]
+    fn test_invoking_user(shell: &str) -> crate::config::InvokingUser {
+        crate::config::InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: OsString::from("paco"),
+            home: "/home/paco".into(),
+            shell: OsString::from(shell),
+            groups: vec![1000],
+            xdg_data_home: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn elevated_shell_uses_passwd_shell_not_inherited_root_shell() {
+        let user = test_invoking_user("/bin/fish");
+        let (invocations, actual_user) = unix_shell_launch(
+            crate::config::InvocationContext::Elevated(user),
+            Some(OsString::from("/bin/root-shell")),
+        )
+        .unwrap();
+
+        assert_eq!(invocations[0].program, OsString::from("/bin/fish"));
+        assert_eq!(invocations[1].program, OsString::from("/bin/sh"));
+        assert_eq!(actual_user.unwrap().name, OsString::from("paco"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unresolved_elevated_shell_fails_closed() {
+        let error = unix_shell_launch(
+            crate::config::InvocationContext::ElevatedUnresolved,
+            Some(OsString::from("/bin/root-shell")),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Could not resolve invoking user; shell was not opened"
         );
     }
 
