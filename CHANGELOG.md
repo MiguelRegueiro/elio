@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a configurable `fullscreen_preview` (`P`) shortcut to temporarily expand the preview pane.
 - Added bulk archive extraction for selected archives. ([#241])
 - Added a Nord example theme. ([#270])
+- Added invoking-user-aware `sudo` and `doas` sessions on Unix: elio retains elevated filesystem access while using the invoking user's config, Places, shell, applications, editor, zoxide, and Trash/Restore; direct-root sessions continue using root's state.
 
 ### Changed
 
