@@ -144,9 +144,9 @@ pub(crate) fn shell_invocations() -> Vec<ShellInvocation> {
 
 #[cfg(unix)]
 fn unix_shell_launch(
-    context: crate::config::InvocationContext,
+    context: &crate::config::InvocationContext,
     inherited_shell: Option<OsString>,
-) -> Result<(Vec<ShellInvocation>, Option<crate::config::InvokingUser>), String> {
+) -> Result<(Vec<ShellInvocation>, Option<&crate::config::InvokingUser>), String> {
     match context {
         crate::config::InvocationContext::Normal
         | crate::config::InvocationContext::RootSession => {
@@ -299,11 +299,9 @@ mod tests {
     #[test]
     fn elevated_shell_uses_passwd_shell_not_inherited_root_shell() {
         let user = test_invoking_user("/bin/fish");
-        let (invocations, actual_user) = unix_shell_launch(
-            crate::config::InvocationContext::Elevated(user),
-            Some(OsString::from("/bin/root-shell")),
-        )
-        .unwrap();
+        let context = crate::config::InvocationContext::Elevated(user);
+        let (invocations, actual_user) =
+            unix_shell_launch(&context, Some(OsString::from("/bin/root-shell"))).unwrap();
 
         assert_eq!(invocations[0].program, OsString::from("/bin/fish"));
         assert_eq!(invocations[1].program, OsString::from("/bin/sh"));
@@ -314,7 +312,7 @@ mod tests {
     #[test]
     fn unresolved_elevated_shell_fails_closed() {
         let error = unix_shell_launch(
-            crate::config::InvocationContext::ElevatedUnresolved,
+            &crate::config::InvocationContext::ElevatedUnresolved,
             Some(OsString::from("/bin/root-shell")),
         )
         .unwrap_err();

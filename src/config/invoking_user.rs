@@ -6,6 +6,7 @@ use std::{
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::PathBuf,
     ptr,
+    sync::OnceLock,
 };
 
 #[cfg(target_os = "linux")]
@@ -40,7 +41,7 @@ pub(crate) const SESSION_ENVIRONMENT_KEYS: &[&str] = &[
 ];
 
 #[cfg(unix)]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct InvokingUser {
     pub(crate) uid: libc::uid_t,
     pub(crate) gid: libc::gid_t,
@@ -54,7 +55,7 @@ pub(crate) struct InvokingUser {
 }
 
 #[cfg(unix)]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum InvocationContext {
     Normal,
     RootSession,
@@ -63,7 +64,15 @@ pub(crate) enum InvocationContext {
 }
 
 #[cfg(unix)]
-pub(crate) fn context() -> InvocationContext {
+static INVOCATION_CONTEXT: OnceLock<InvocationContext> = OnceLock::new();
+
+#[cfg(unix)]
+pub(crate) fn context() -> &'static InvocationContext {
+    INVOCATION_CONTEXT.get_or_init(detect_context)
+}
+
+#[cfg(unix)]
+fn detect_context() -> InvocationContext {
     let sudo_uid = env::var_os("SUDO_UID");
     let doas_user = env::var_os("DOAS_USER");
     let has_elevation_metadata = sudo_uid.is_some()
@@ -86,16 +95,15 @@ pub(crate) fn env_var(name: &str) -> Option<OsString> {
 
 #[cfg(unix)]
 fn env_var_for_context(
-    context: InvocationContext,
+    context: &InvocationContext,
     name: &str,
     normal_value: Option<OsString>,
 ) -> Option<OsString> {
     match context {
         InvocationContext::Normal | InvocationContext::RootSession => normal_value,
-        InvocationContext::Elevated(user) => user
-            .session_environment
-            .into_iter()
-            .find_map(|(key, value)| (key == name).then_some(value)),
+        InvocationContext::Elevated(user) => {
+            user_environment_value(user, name).map(OsStr::to_os_string)
+        }
         InvocationContext::ElevatedUnresolved => None,
     }
 }
@@ -108,7 +116,7 @@ pub(crate) fn env_var(name: &str) -> Option<std::ffi::OsString> {
 #[cfg(unix)]
 pub(crate) fn home_dir() -> Option<PathBuf> {
     match context() {
-        InvocationContext::Elevated(user) => Some(user.home),
+        InvocationContext::Elevated(user) => Some(user.home.clone()),
         InvocationContext::Normal
         | InvocationContext::RootSession
         | InvocationContext::ElevatedUnresolved => dirs::home_dir(),
@@ -128,10 +136,10 @@ pub(crate) fn trash_home_dir() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn trash_home_for_context(context: InvocationContext) -> Option<PathBuf> {
+fn trash_home_for_context(context: &InvocationContext) -> Option<PathBuf> {
     match context {
         InvocationContext::Normal | InvocationContext::RootSession => dirs::home_dir(),
-        InvocationContext::Elevated(user) => Some(user.home),
+        InvocationContext::Elevated(user) => Some(user.home.clone()),
         InvocationContext::ElevatedUnresolved => None,
     }
 }
@@ -142,6 +150,7 @@ pub(crate) fn trash_data_dir() -> Option<PathBuf> {
         InvocationContext::Normal | InvocationContext::RootSession => dirs::data_dir(),
         InvocationContext::Elevated(user) => user
             .xdg_data_home
+            .clone()
             .or_else(|| Some(user.home.join(".local/share"))),
         InvocationContext::ElevatedUnresolved => None,
     }
@@ -600,7 +609,7 @@ mod tests {
     fn elevated_environment_uses_invoking_user_value_not_root_value() {
         assert_eq!(
             env_var_for_context(
-                InvocationContext::Elevated(test_user()),
+                &InvocationContext::Elevated(test_user()),
                 "EDITOR",
                 Some(OsString::from("root-editor")),
             ),
@@ -608,7 +617,7 @@ mod tests {
         );
         assert_eq!(
             env_var_for_context(
-                InvocationContext::Elevated(test_user()),
+                &InvocationContext::Elevated(test_user()),
                 "DISPLAY",
                 Some(OsString::from(":root")),
             ),
@@ -620,7 +629,7 @@ mod tests {
     fn normal_environment_remains_unchanged() {
         assert_eq!(
             env_var_for_context(
-                InvocationContext::Normal,
+                &InvocationContext::Normal,
                 "EDITOR",
                 Some(OsString::from("nvim")),
             ),
@@ -717,8 +726,13 @@ mod tests {
     #[test]
     fn unresolved_elevated_context_has_no_trash_home() {
         assert_eq!(
-            trash_home_for_context(InvocationContext::ElevatedUnresolved),
+            trash_home_for_context(&InvocationContext::ElevatedUnresolved),
             None
         );
+    }
+
+    #[test]
+    fn process_context_is_resolved_once() {
+        assert!(std::ptr::eq(context(), context()));
     }
 }

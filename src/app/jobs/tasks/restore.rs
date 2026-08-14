@@ -220,7 +220,7 @@ fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<()> {
             }
             InvocationContext::Elevated(user) => {
                 let response = super::super::invoking_user_fs::run(
-                    &user,
+                    user,
                     &Request::Restore(path.to_path_buf()),
                 )
                 .map_err(anyhow::Error::msg)?;
