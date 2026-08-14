@@ -36,6 +36,22 @@ fn normal_permanent_delete_keeps_existing_staging_root() {
     );
 }
 
+#[test]
+fn restore_origin_cleanup_collects_only_names_inside_selected_trash() {
+    let trash_dir = Path::new("/Users/paco/.Trash");
+    let inside = trash_dir.join("inside.txt");
+    let outside = PathBuf::from("/Users/paco/Documents/outside.txt");
+    let nested = trash_dir.join("folder/nested.txt");
+    let mut names = Vec::new();
+
+    collect_deleted_restore_origin(&inside, Some(trash_dir), &mut names);
+    collect_deleted_restore_origin(&outside, Some(trash_dir), &mut names);
+    collect_deleted_restore_origin(&nested, Some(trash_dir), &mut names);
+    collect_deleted_restore_origin(&inside, None, &mut names);
+
+    assert_eq!(names, vec!["inside.txt".to_string()]);
+}
+
 // ── GIO trash backend ─────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]

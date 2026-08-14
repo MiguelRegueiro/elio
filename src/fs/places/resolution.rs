@@ -412,9 +412,10 @@ pub(crate) fn trash_dir(home: &Path) -> Option<PathBuf> {
     } else {
         Some(home.join(".local/share"))
     };
-    #[cfg(any(not(unix), target_os = "macos"))]
+    #[cfg(not(unix))]
     let data_dir = dirs::data_dir();
 
+    #[cfg(not(target_os = "macos"))]
     if let Some(data_dir) = data_dir {
         let xdg_trash = data_dir.join("Trash/files");
         if xdg_trash.exists() {
@@ -422,7 +423,7 @@ pub(crate) fn trash_dir(home: &Path) -> Option<PathBuf> {
         }
     }
 
-    // macOS: ~/.Trash (freedesktop path above won't exist there)
+    // macOS: always use the selected user's ~/.Trash.
     let mac_trash = home.join(".Trash");
     if mac_trash.exists() {
         return Some(mac_trash);

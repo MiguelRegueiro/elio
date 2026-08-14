@@ -182,7 +182,6 @@ fn decode_utf16be_empty_slice_gives_empty_string() {
 // ── remove_from_origins_map ───────────────────────────────────────────────
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_removes_exact_match() {
     let mut map = std::collections::HashMap::from([
         (
@@ -204,7 +203,6 @@ fn remove_from_origins_map_removes_exact_match() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_handles_collision_suffix_with_extension() {
     // "report.pdf" was stored as the key but macOS renamed it "report 2.pdf"
     // in the trash due to a collision.
@@ -221,7 +219,6 @@ fn remove_from_origins_map_handles_collision_suffix_with_extension() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_handles_collision_suffix_without_extension() {
     let mut map =
         std::collections::HashMap::from([("notes".to_string(), "/home/user/notes".to_string())]);
@@ -231,7 +228,6 @@ fn remove_from_origins_map_handles_collision_suffix_without_extension() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_returns_false_when_key_not_found() {
     let mut map = std::collections::HashMap::from([(
         "other.txt".to_string(),
@@ -246,7 +242,6 @@ fn remove_from_origins_map_returns_false_when_key_not_found() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_removes_multiple_names() {
     let mut map = std::collections::HashMap::from([
         ("a.txt".to_string(), "/home/user/a.txt".to_string()),
@@ -261,9 +256,94 @@ fn remove_from_origins_map_removes_multiple_names() {
 }
 
 #[test]
-#[cfg(target_os = "macos")]
 fn remove_from_origins_map_no_op_on_empty_map() {
     let mut map = std::collections::HashMap::new();
     let changed = remove_from_origins_map(&mut map, &["foo.txt"]);
     assert!(!changed);
+}
+
+#[test]
+fn checked_origin_removal_accepts_missing_store() {
+    let path = temp_path("origins-missing");
+    assert!(remove_restore_origins_at_path_checked(&path, &["foo.txt"]).is_ok());
+}
+
+#[test]
+fn checked_origin_removal_accepts_missing_key_without_rewriting() {
+    let path = temp_path("origins-missing-key");
+    let contents = br#"{"other.txt":"/Users/paco/other.txt"}"#;
+    fs::write(&path, contents).expect("failed to write origins store");
+
+    remove_restore_origins_at_path_checked(&path, &["foo.txt"])
+        .expect("missing key should be a successful no-op");
+
+    assert_eq!(fs::read(&path).unwrap(), contents);
+    fs::remove_file(path).ok();
+}
+
+#[test]
+fn checked_origin_removal_persists_matching_mutation() {
+    let path = temp_path("origins-persist");
+    fs::write(
+        &path,
+        br#"{"report.pdf":"/Users/paco/report.pdf","notes.txt":"/Users/paco/notes.txt"}"#,
+    )
+    .expect("failed to write origins store");
+
+    remove_restore_origins_at_path_checked(&path, &["report.pdf"])
+        .expect("matching key should be removed");
+
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(!map.contains_key("report.pdf"));
+    assert_eq!(
+        map.get("notes.txt").map(String::as_str),
+        Some("/Users/paco/notes.txt")
+    );
+    fs::remove_file(path).ok();
+}
+
+#[test]
+fn checked_origin_removal_rejects_malformed_store() {
+    let path = temp_path("origins-malformed");
+    fs::write(&path, b"{").expect("failed to write malformed origins store");
+
+    let error = remove_restore_origins_at_path_checked(&path, &["report.pdf"]).unwrap_err();
+
+    assert!(error.to_string().contains("cannot parse"));
+    assert_eq!(fs::read(&path).unwrap(), b"{");
+    fs::remove_file(path).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_origin_removal_reports_read_failure() {
+    let path = temp_path("origins-read-error");
+    fs::create_dir(&path).expect("failed to create origins directory");
+
+    let error = remove_restore_origins_at_path_checked(&path, &["report.pdf"]).unwrap_err();
+
+    assert!(error.to_string().contains("cannot read"));
+    fs::remove_dir(path).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_origin_removal_reports_write_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let path = temp_path("origins-write-error");
+    fs::write(&path, br#"{"report.pdf":"/Users/paco/report.pdf"}"#)
+        .expect("failed to write origins store");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
+        .expect("failed to make origins store read-only");
+
+    let error = remove_restore_origins_at_path_checked(&path, &["report.pdf"]).unwrap_err();
+
+    assert!(error.to_string().contains("cannot write"));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).ok();
+    fs::remove_file(path).ok();
 }
