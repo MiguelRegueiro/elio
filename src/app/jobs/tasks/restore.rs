@@ -214,7 +214,7 @@ fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<()> {
             user_fs_helper::Request,
         };
         match invoking_user_context() {
-            InvocationContext::Normal => {}
+            InvocationContext::Normal | InvocationContext::RootSession => {}
             InvocationContext::ElevatedUnresolved => {
                 anyhow::bail!("could not resolve invoking user; nothing was restored")
             }

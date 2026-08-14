@@ -57,16 +57,25 @@ pub(crate) struct InvokingUser {
 #[derive(Clone, Debug)]
 pub(crate) enum InvocationContext {
     Normal,
+    RootSession,
     Elevated(InvokingUser),
     ElevatedUnresolved,
 }
 
 #[cfg(unix)]
 pub(crate) fn context() -> InvocationContext {
+    let sudo_uid = env::var_os("SUDO_UID");
+    let doas_user = env::var_os("DOAS_USER");
+    let has_elevation_metadata = sudo_uid.is_some()
+        || doas_user.is_some()
+        || ["SUDO_COMMAND", "SUDO_GID", "SUDO_USER"]
+            .into_iter()
+            .any(|name| env::var_os(name).is_some());
     invocation_context(
         unsafe { libc::geteuid() },
-        env::var_os("SUDO_UID").as_deref(),
-        env::var_os("DOAS_USER").as_deref(),
+        sudo_uid.as_deref(),
+        doas_user.as_deref(),
+        has_elevation_metadata,
     )
 }
 
@@ -82,7 +91,7 @@ fn env_var_for_context(
     normal_value: Option<OsString>,
 ) -> Option<OsString> {
     match context {
-        InvocationContext::Normal => normal_value,
+        InvocationContext::Normal | InvocationContext::RootSession => normal_value,
         InvocationContext::Elevated(user) => user
             .session_environment
             .into_iter()
@@ -100,7 +109,9 @@ pub(crate) fn env_var(name: &str) -> Option<std::ffi::OsString> {
 pub(crate) fn home_dir() -> Option<PathBuf> {
     match context() {
         InvocationContext::Elevated(user) => Some(user.home),
-        InvocationContext::Normal | InvocationContext::ElevatedUnresolved => dirs::home_dir(),
+        InvocationContext::Normal
+        | InvocationContext::RootSession
+        | InvocationContext::ElevatedUnresolved => dirs::home_dir(),
     }
 }
 
@@ -119,7 +130,7 @@ pub(crate) fn trash_home_dir() -> Option<std::path::PathBuf> {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn trash_home_for_context(context: InvocationContext) -> Option<PathBuf> {
     match context {
-        InvocationContext::Normal => dirs::home_dir(),
+        InvocationContext::Normal | InvocationContext::RootSession => dirs::home_dir(),
         InvocationContext::Elevated(user) => Some(user.home),
         InvocationContext::ElevatedUnresolved => None,
     }
@@ -128,7 +139,7 @@ fn trash_home_for_context(context: InvocationContext) -> Option<PathBuf> {
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) fn trash_data_dir() -> Option<PathBuf> {
     match context() {
-        InvocationContext::Normal => dirs::data_dir(),
+        InvocationContext::Normal | InvocationContext::RootSession => dirs::data_dir(),
         InvocationContext::Elevated(user) => user
             .xdg_data_home
             .or_else(|| Some(user.home.join(".local/share"))),
@@ -141,9 +152,13 @@ fn invocation_context(
     effective_uid: libc::uid_t,
     sudo_uid: Option<&OsStr>,
     doas_user: Option<&OsStr>,
+    has_elevation_metadata: bool,
 ) -> InvocationContext {
     if effective_uid != 0 {
         return InvocationContext::Normal;
+    }
+    if !has_elevation_metadata {
+        return InvocationContext::RootSession;
     }
     let user = parse_non_root_uid(sudo_uid)
         .and_then(passwd_by_uid)
@@ -531,8 +546,21 @@ mod tests {
     #[test]
     fn non_root_process_ignores_elevation_metadata() {
         assert!(matches!(
-            invocation_context(1000, Some(OsStr::new("1001")), Some(OsStr::new("paco"))),
+            invocation_context(
+                1000,
+                Some(OsStr::new("1001")),
+                Some(OsStr::new("paco")),
+                true,
+            ),
             InvocationContext::Normal
+        ));
+    }
+
+    #[test]
+    fn root_without_elevation_metadata_is_root_session() {
+        assert!(matches!(
+            invocation_context(0, None, None, false),
+            InvocationContext::RootSession
         ));
     }
 
@@ -544,7 +572,7 @@ mod tests {
         }
         let expected = passwd_by_uid(uid).expect("current user should have a passwd record");
         let InvocationContext::Elevated(actual) =
-            invocation_context(0, Some(OsStr::new(&uid.to_string())), None)
+            invocation_context(0, Some(OsStr::new(&uid.to_string())), None, true)
         else {
             panic!("current user should resolve as invoking user");
         };
@@ -558,7 +586,12 @@ mod tests {
     #[test]
     fn unresolved_elevated_context_does_not_become_normal() {
         assert!(matches!(
-            invocation_context(0, Some(OsStr::new("invalid")), Some(OsStr::new("root"))),
+            invocation_context(
+                0,
+                Some(OsStr::new("invalid")),
+                Some(OsStr::new("root")),
+                true,
+            ),
             InvocationContext::ElevatedUnresolved
         ));
     }

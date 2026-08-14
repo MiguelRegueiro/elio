@@ -26,7 +26,8 @@ fn prepare_external_for_context(
     cwd: Option<&Path>,
 ) -> io::Result<()> {
     match context {
-        crate::config::InvocationContext::Normal => Ok(()),
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => Ok(()),
         crate::config::InvocationContext::Elevated(user) => {
             let cwd = cwd.unwrap_or(&user.home);
             prepare(command, &user, Some(cwd))
