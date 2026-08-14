@@ -2536,7 +2536,11 @@ fn confirm_open_with_launch_failure_sets_status() {
         app.overlays.open_with.is_none(),
         "overlay must close even on failure"
     );
-    assert_eq!(app.status, "Failed to open with Ghost App");
+    assert!(
+        app.status.starts_with("Failed to open with Ghost App: "),
+        "spawn error should be visible: {}",
+        app.status
+    );
 
     fs::remove_dir_all(&root).ok();
 }

@@ -11,9 +11,12 @@ mod ui;
 
 use serde::Deserialize;
 
+pub(crate) use self::invoking_user::env_var as invoking_user_env_var;
+
 #[cfg(unix)]
 pub(crate) use self::invoking_user::{
-    InvocationContext, InvokingUser, context as invoking_user_context,
+    InvocationContext, InvokingUser, SESSION_ENVIRONMENT_KEYS, context as invoking_user_context,
+    user_environment_value,
 };
 
 #[cfg(all(unix, not(target_os = "macos")))]

@@ -123,8 +123,18 @@ pub(crate) fn run_with_startup_state(
     }
 }
 
-fn run_blocking_in_terminal(program: &str, args: &[String]) {
-    let _ = Command::new(program).args(args).status();
+fn run_open_command_in_terminal(
+    program: &str,
+    args: &[String],
+    elevated_cwd: &Path,
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut command = Command::new(program);
+    command.args(args);
+    #[cfg(unix)]
+    crate::invoking_user_command::prepare_external(&mut command, Some(elevated_cwd))?;
+    #[cfg(not(unix))]
+    let _ = elevated_cwd;
+    command.status()
 }
 
 #[cfg(unix)]
@@ -442,23 +452,35 @@ fn run_app(
             if let Some(task) = app.pending_terminal_task.take() {
                 let zoxide_result = match task {
                     PendingTerminalTask::Command { program, args } => {
+                        let cwd = app.navigation.cwd.clone();
                         pause_runtime_input(&input_reader, true);
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
-                        run_blocking_in_terminal(&program, &args);
+                        let result = run_open_command_in_terminal(&program, &args, &cwd);
                         resume_terminal(terminal, drainer, kitty_dnd)?;
                         app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
+                        if let Err(error) = result {
+                            app.set_status_message(format!("Could not open terminal app: {error}"));
+                        }
                         None
                     }
                     PendingTerminalTask::Commands(commands) => {
+                        let cwd = app.navigation.cwd.clone();
                         pause_runtime_input(&input_reader, true);
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
+                        let mut last_error = None;
                         for (program, args) in commands {
-                            run_blocking_in_terminal(&program, &args);
+                            if let Err(error) = run_open_command_in_terminal(&program, &args, &cwd)
+                            {
+                                last_error = Some(error);
+                            }
                         }
                         resume_terminal(terminal, drainer, kitty_dnd)?;
                         app.invalidate_terminal_image_overlay_after_terminal_task();
                         pause_runtime_input(&input_reader, false);
+                        if let Some(error) = last_error {
+                            app.set_status_message(format!("Could not open terminal app: {error}"));
+                        }
                         None
                     }
                     #[cfg(unix)]

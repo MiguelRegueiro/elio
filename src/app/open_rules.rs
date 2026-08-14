@@ -1,4 +1,4 @@
-use std::{env, ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf};
 
 use crate::{
     config::{self, OpenPlatform, OpenRule, OpenTargetType},
@@ -121,7 +121,7 @@ fn entry_is_text_like(entry: &Entry, facts: file_info::FileFacts) -> bool {
 }
 
 fn command_template(command: &str) -> Result<CommandTemplate, String> {
-    command_template_with_env(command, env::var_os)
+    command_template_with_env(command, config::invoking_user_env_var)
 }
 
 fn command_template_with_env(

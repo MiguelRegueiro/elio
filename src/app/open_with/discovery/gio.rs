@@ -23,6 +23,7 @@ pub(super) fn discover_via_gio(
 ) -> Option<Vec<OpenWithApp>> {
     let mut cmd = Command::new("gio");
     cmd.args(["mime", mime]);
+    crate::invoking_user_command::prepare_external(&mut cmd, None).ok()?;
     let output = run_command_capture_stdout_cancellable(cmd, "open-with-gio", canceled)?;
     let text = String::from_utf8_lossy(&output);
 

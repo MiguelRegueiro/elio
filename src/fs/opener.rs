@@ -149,6 +149,7 @@ fn spawn_with_deadline(
 ) -> io::Result<()> {
     use std::time::Instant;
 
+    prepare_external_open_command(&mut command)?;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -216,6 +217,7 @@ fn detached_spawn_with_deadline(
 ) -> io::Result<()> {
     use std::time::Instant;
 
+    prepare_external_open_command(command)?;
     prepare_detached_command(command);
     let mut child = command.spawn()?;
 
@@ -251,8 +253,19 @@ fn prepare_detached_command(command: &mut Command) {
     }
 }
 
+#[cfg(unix)]
+fn prepare_external_open_command(command: &mut Command) -> io::Result<()> {
+    crate::invoking_user_command::prepare_external(command, None)
+}
+
+#[cfg(not(unix))]
+fn prepare_external_open_command(_command: &mut Command) -> io::Result<()> {
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn status_spawn(command: &mut Command) -> io::Result<()> {
+    prepare_external_open_command(command)?;
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());

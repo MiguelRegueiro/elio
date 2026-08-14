@@ -8,6 +8,30 @@ use std::{
     ptr,
 };
 
+#[cfg(target_os = "linux")]
+use std::io::Read;
+
+#[cfg(unix)]
+pub(crate) const SESSION_ENVIRONMENT_KEYS: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DESKTOP_SESSION",
+    "DISPLAY",
+    "EDITOR",
+    "PATH",
+    "VISUAL",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_DIRS",
+    "XDG_CONFIG_HOME",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_DATA_DIRS",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_DESKTOP",
+    "XDG_SESSION_TYPE",
+];
+
 #[cfg(unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct InvokingUser {
@@ -17,6 +41,8 @@ pub(crate) struct InvokingUser {
     pub(crate) home: PathBuf,
     pub(crate) shell: OsString,
     pub(crate) groups: Vec<libc::gid_t>,
+    pub(crate) session_environment: Vec<(OsString, OsString)>,
+    pub(crate) xdg_config_home: Option<PathBuf>,
     pub(crate) xdg_data_home: Option<PathBuf>,
 }
 
@@ -35,6 +61,32 @@ pub(crate) fn context() -> InvocationContext {
         env::var_os("SUDO_UID").as_deref(),
         env::var_os("DOAS_USER").as_deref(),
     )
+}
+
+#[cfg(unix)]
+pub(crate) fn env_var(name: &str) -> Option<OsString> {
+    env_var_for_context(context(), name, env::var_os(name))
+}
+
+#[cfg(unix)]
+fn env_var_for_context(
+    context: InvocationContext,
+    name: &str,
+    normal_value: Option<OsString>,
+) -> Option<OsString> {
+    match context {
+        InvocationContext::Normal => normal_value,
+        InvocationContext::Elevated(user) => user
+            .session_environment
+            .into_iter()
+            .find_map(|(key, value)| (key == name).then_some(value)),
+        InvocationContext::ElevatedUnresolved => None,
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn env_var(name: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(name)
 }
 
 #[cfg(unix)]
@@ -96,7 +148,10 @@ fn invocation_context(
         return InvocationContext::ElevatedUnresolved;
     };
     user.groups = groups;
-    user.xdg_data_home = validated_xdg_data_home(&user);
+    user.session_environment = invoking_user_environment(user.uid);
+    user.xdg_config_home =
+        validated_xdg_home(user_environment_value(&user, "XDG_CONFIG_HOME"), &user);
+    user.xdg_data_home = validated_xdg_home(user_environment_value(&user, "XDG_DATA_HOME"), &user);
     InvocationContext::Elevated(user)
 }
 
@@ -177,16 +232,18 @@ fn passwd(
                 OsString::from_vec(shell.to_vec())
             },
             groups: vec![record.pw_gid],
+            session_environment: Vec::new(),
+            xdg_config_home: None,
             xdg_data_home: None,
         });
     }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn validated_xdg_data_home(user: &InvokingUser) -> Option<PathBuf> {
+fn validated_xdg_home(value: Option<&OsStr>, user: &InvokingUser) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
 
-    env::var_os("XDG_DATA_HOME")
+    value
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .filter(|path| {
@@ -201,8 +258,160 @@ fn validated_xdg_data_home(user: &InvokingUser) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn validated_xdg_data_home(_user: &InvokingUser) -> Option<PathBuf> {
+fn validated_xdg_home(_value: Option<&OsStr>, _user: &InvokingUser) -> Option<PathBuf> {
     None
+}
+
+#[cfg(unix)]
+pub(crate) fn user_environment_value<'a>(user: &'a InvokingUser, name: &str) -> Option<&'a OsStr> {
+    user.session_environment
+        .iter()
+        .find_map(|(key, value)| (key == name).then_some(value.as_os_str()))
+}
+
+#[cfg(unix)]
+fn invoking_user_environment(uid: libc::uid_t) -> Vec<(OsString, OsString)> {
+    #[cfg(target_os = "linux")]
+    {
+        // Do not fall back to root Elio's environment: if the trusted
+        // same-user ancestor cannot be verified, omit session values.
+        linux_ancestor_environment(uid).unwrap_or_default()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = uid;
+        SESSION_ENVIRONMENT_KEYS
+            .iter()
+            .filter_map(|name| env::var_os(name).map(|value| (OsString::from(name), value)))
+            .collect()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_ancestor_environment(uid: libc::uid_t) -> Option<Vec<(OsString, OsString)>> {
+    // sudo/doas may strip desktop-session variables before Elio starts. Walk
+    // only through privileged ancestors to the first process wholly owned by
+    // the already-resolved invoking UID, then recover only the fixed allowlist.
+    let mut pid = unsafe { libc::getppid() };
+    let mut elevation_environment = None;
+    for _ in 0..32 {
+        if pid <= 1 {
+            return None;
+        }
+        let (parent, process_uids) = linux_process_identity(pid)?;
+        if process_uids.iter().all(|process_uid| *process_uid == uid) {
+            let mut environment = linux_process_environment(pid)?;
+            let (_, verified_uids) = linux_process_identity(pid)?;
+            if !verified_uids.iter().all(|process_uid| *process_uid == uid) {
+                return None;
+            }
+            if let Some(elevation_environment) = elevation_environment {
+                environment = merge_linux_environments(environment, elevation_environment);
+            }
+            return Some(environment);
+        }
+        let privileged_bridge = process_uids
+            .iter()
+            .all(|process_uid| *process_uid == 0 || *process_uid == uid)
+            && process_uids.contains(&0);
+        if !privileged_bridge || parent == pid {
+            return None;
+        }
+        if elevation_environment.is_none() {
+            elevation_environment = linux_elevation_environment(pid, process_uids);
+        }
+        pid = parent;
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn linux_elevation_environment(
+    pid: libc::pid_t,
+    expected_uids: [libc::uid_t; 4],
+) -> Option<Vec<(OsString, OsString)>> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    let name = executable.file_name()?.as_bytes();
+    if name != b"sudo" && name != b"doas" {
+        return None;
+    }
+    let metadata = std::fs::metadata(&executable).ok()?;
+    if metadata.uid() != 0 || metadata.permissions().mode() & 0o4000 == 0 {
+        return None;
+    }
+    let environment = linux_process_environment(pid)?;
+    let (_, verified_uids) = linux_process_identity(pid)?;
+    (verified_uids == expected_uids).then_some(environment)
+}
+
+#[cfg(target_os = "linux")]
+fn merge_linux_environments(
+    base: Vec<(OsString, OsString)>,
+    elevation: Vec<(OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    let mut environment: std::collections::BTreeMap<_, _> = base.into_iter().collect();
+    environment.extend(elevation);
+    environment.into_iter().collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(pid: libc::pid_t) -> Option<(libc::pid_t, [libc::uid_t; 4])> {
+    let status = std::fs::read(format!("/proc/{pid}/status")).ok()?;
+    parse_linux_process_identity(&status)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_identity(status: &[u8]) -> Option<(libc::pid_t, [libc::uid_t; 4])> {
+    let text = std::str::from_utf8(status).ok()?;
+    let parent = text.lines().find_map(|line| {
+        line.strip_prefix("PPid:")
+            .and_then(|value| value.trim().parse().ok())
+    })?;
+    let uids = text.lines().find_map(|line| {
+        let mut values = line.strip_prefix("Uid:")?.split_whitespace();
+        Some([
+            values.next()?.parse().ok()?,
+            values.next()?.parse().ok()?,
+            values.next()?.parse().ok()?,
+            values.next()?.parse().ok()?,
+        ])
+    })?;
+    Some((parent, uids))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_environment(pid: libc::pid_t) -> Option<Vec<(OsString, OsString)>> {
+    let file = std::fs::File::open(format!("/proc/{pid}/environ")).ok()?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 1024 * 1024 {
+        return None;
+    }
+    Some(parse_allowlisted_environment(&bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_allowlisted_environment(bytes: &[u8]) -> Vec<(OsString, OsString)> {
+    let mut environment = std::collections::BTreeMap::new();
+    for item in bytes.split(|byte| *byte == 0) {
+        let Some(separator) = item.iter().position(|byte| *byte == b'=') else {
+            continue;
+        };
+        let (name, value) = item.split_at(separator);
+        if SESSION_ENVIRONMENT_KEYS
+            .iter()
+            .any(|candidate| candidate.as_bytes() == name)
+        {
+            environment.insert(
+                OsString::from_vec(name.to_vec()),
+                OsString::from_vec(value[1..].to_vec()),
+            );
+        }
+    }
+    environment.into_iter().collect()
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -290,6 +499,20 @@ fn passwd_buffer_size() -> usize {
 mod tests {
     use super::*;
 
+    fn test_user() -> InvokingUser {
+        InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: OsString::from("paco"),
+            home: PathBuf::from("/home/paco"),
+            shell: OsString::from("/bin/sh"),
+            groups: vec![1000],
+            session_environment: vec![(OsString::from("EDITOR"), OsString::from("nvim"))],
+            xdg_config_home: None,
+            xdg_data_home: None,
+        }
+    }
+
     #[test]
     fn sudo_uid_accepts_only_non_root_numeric_ids() {
         assert_eq!(parse_non_root_uid(Some(OsStr::new("1000"))), Some(1000));
@@ -331,6 +554,99 @@ mod tests {
             invocation_context(0, Some(OsStr::new("invalid")), Some(OsStr::new("root"))),
             InvocationContext::ElevatedUnresolved
         ));
+    }
+
+    #[test]
+    fn elevated_environment_uses_invoking_user_value_not_root_value() {
+        assert_eq!(
+            env_var_for_context(
+                InvocationContext::Elevated(test_user()),
+                "EDITOR",
+                Some(OsString::from("root-editor")),
+            ),
+            Some(OsString::from("nvim"))
+        );
+        assert_eq!(
+            env_var_for_context(
+                InvocationContext::Elevated(test_user()),
+                "DISPLAY",
+                Some(OsString::from(":root")),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn normal_environment_remains_unchanged() {
+        assert_eq!(
+            env_var_for_context(
+                InvocationContext::Normal,
+                "EDITOR",
+                Some(OsString::from("nvim")),
+            ),
+            Some(OsString::from("nvim"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_environment_parser_keeps_only_allowlisted_values() {
+        let environment = parse_allowlisted_environment(
+            b"HOME=/root\0DISPLAY=:0\0EDITOR=nvim --clean\0SUDO_UID=1000\0",
+        );
+
+        assert_eq!(
+            environment,
+            vec![
+                (OsString::from("DISPLAY"), OsString::from(":0")),
+                (OsString::from("EDITOR"), OsString::from("nvim --clean")),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_ancestor_environment_reads_current_user_parent() {
+        let uid = unsafe { libc::getuid() };
+        if uid == 0 {
+            return;
+        }
+        let environment = linux_ancestor_environment(uid)
+            .expect("non-root test process should have a same-user ancestor");
+        assert!(
+            environment.iter().any(|(name, _)| name == "PATH"),
+            "allowlisted parent environment should contain PATH"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn elevation_environment_overrides_stale_shell_values() {
+        let merged = merge_linux_environments(
+            vec![
+                (OsString::from("DISPLAY"), OsString::from(":0")),
+                (OsString::from("EDITOR"), OsString::from("vi")),
+            ],
+            vec![(OsString::from("EDITOR"), OsString::from("nvim"))],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                (OsString::from("DISPLAY"), OsString::from(":0")),
+                (OsString::from("EDITOR"), OsString::from("nvim")),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_status_parser_reads_parent_and_all_uids() {
+        assert_eq!(
+            parse_linux_process_identity(b"Name:\ttest\nPPid:\t42\nUid:\t1000\t0\t0\t0\n"),
+            Some((42, [1000, 0, 0, 0]))
+        );
+        assert_eq!(parse_linux_process_identity(b"Name:\ttest\n"), None);
     }
 
     #[cfg(not(target_os = "macos"))]

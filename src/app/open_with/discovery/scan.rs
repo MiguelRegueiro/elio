@@ -146,7 +146,7 @@ pub(super) fn desktop_entry_dirs() -> Vec<PathBuf> {
     // Flatpak user exports sit between user data home and system dirs.
     // On many systems Flatpak adds this to XDG_DATA_DIRS itself, so the
     // deduplication step below will handle the overlap.
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = super::invoking_home_dir() {
         dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
     }
 
@@ -191,14 +191,9 @@ pub(super) fn mimeapps_paths() -> Vec<PathBuf> {
     // ── Config-dir section ────────────────────────────────────────────────────
 
     // $XDG_CONFIG_HOME defaults to ~/.config
-    let config_home = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .map(|h| h.join(".config"))
-                .unwrap_or_default()
-        });
-    if !config_home.as_os_str().is_empty() {
+    if let Some(config_home) = super::invoking_config_home()
+        && !config_home.as_os_str().is_empty()
+    {
         for desktop in &desktops {
             paths.push(config_home.join(format!("{desktop}-mimeapps.list")));
         }
@@ -206,8 +201,9 @@ pub(super) fn mimeapps_paths() -> Vec<PathBuf> {
     }
 
     // $XDG_CONFIG_DIRS defaults to /etc/xdg
-    for dir in std::env::var("XDG_CONFIG_DIRS")
-        .unwrap_or_else(|_| "/etc/xdg".to_string())
+    for dir in crate::config::invoking_user_env_var("XDG_CONFIG_DIRS")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| "/etc/xdg".to_string())
         .split(':')
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
