@@ -17,6 +17,8 @@ pub(crate) const SESSION_ENVIRONMENT_KEYS: &[&str] = &[
     "DESKTOP_SESSION",
     "DISPLAY",
     "EDITOR",
+    "ELIO_ZOXIDE_OPTS",
+    "FZF_DEFAULT_OPTS",
     "PATH",
     "VISUAL",
     "WAYLAND_DISPLAY",
@@ -30,6 +32,11 @@ pub(crate) const SESSION_ENVIRONMENT_KEYS: &[&str] = &[
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
+    "_ZO_DATA_DIR",
+    "_ZO_ECHO",
+    "_ZO_EXCLUDE_DIRS",
+    "_ZO_MAXAGE",
+    "_ZO_RESOLVE_SYMLINKS",
 ];
 
 #[cfg(unix)]
@@ -592,7 +599,7 @@ mod tests {
     #[test]
     fn linux_environment_parser_keeps_only_allowlisted_values() {
         let environment = parse_allowlisted_environment(
-            b"HOME=/root\0DISPLAY=:0\0EDITOR=nvim --clean\0SUDO_UID=1000\0",
+            b"HOME=/root\0DISPLAY=:0\0EDITOR=nvim --clean\0ELIO_ZOXIDE_OPTS=--no-mouse\0FZF_DEFAULT_OPTS=--height=40%\0SUDO_UID=1000\0",
         );
 
         assert_eq!(
@@ -600,8 +607,32 @@ mod tests {
             vec![
                 (OsString::from("DISPLAY"), OsString::from(":0")),
                 (OsString::from("EDITOR"), OsString::from("nvim --clean")),
+                (
+                    OsString::from("ELIO_ZOXIDE_OPTS"),
+                    OsString::from("--no-mouse"),
+                ),
+                (
+                    OsString::from("FZF_DEFAULT_OPTS"),
+                    OsString::from("--height=40%"),
+                ),
             ]
         );
+    }
+
+    #[test]
+    fn zoxide_environment_values_are_allowlisted() {
+        for name in [
+            "_ZO_DATA_DIR",
+            "_ZO_ECHO",
+            "_ZO_EXCLUDE_DIRS",
+            "_ZO_MAXAGE",
+            "_ZO_RESOLVE_SYMLINKS",
+        ] {
+            assert!(
+                SESSION_ENVIRONMENT_KEYS.contains(&name),
+                "missing zoxide environment value: {name}"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
