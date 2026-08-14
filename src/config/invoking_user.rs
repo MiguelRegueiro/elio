@@ -64,6 +64,15 @@ pub(crate) enum InvocationContext {
 }
 
 #[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdentityClaim {
+    Absent,
+    Root,
+    User(libc::uid_t),
+    Invalid,
+}
+
+#[cfg(unix)]
 static INVOCATION_CONTEXT: OnceLock<InvocationContext> = OnceLock::new();
 
 #[cfg(unix)]
@@ -74,17 +83,17 @@ pub(crate) fn context() -> &'static InvocationContext {
 #[cfg(unix)]
 fn detect_context() -> InvocationContext {
     let sudo_uid = env::var_os("SUDO_UID");
+    let sudo_user = env::var_os("SUDO_USER");
     let doas_user = env::var_os("DOAS_USER");
-    let has_elevation_metadata = sudo_uid.is_some()
-        || doas_user.is_some()
-        || ["SUDO_COMMAND", "SUDO_GID", "SUDO_USER"]
-            .into_iter()
-            .any(|name| env::var_os(name).is_some());
+    let has_other_sudo_metadata = ["SUDO_COMMAND", "SUDO_GID"]
+        .into_iter()
+        .any(|name| env::var_os(name).is_some());
     invocation_context(
         unsafe { libc::geteuid() },
         sudo_uid.as_deref(),
+        sudo_user.as_deref(),
+        has_other_sudo_metadata,
         doas_user.as_deref(),
-        has_elevation_metadata,
     )
 }
 
@@ -160,18 +169,23 @@ pub(crate) fn trash_data_dir() -> Option<PathBuf> {
 fn invocation_context(
     effective_uid: libc::uid_t,
     sudo_uid: Option<&OsStr>,
+    sudo_user: Option<&OsStr>,
+    has_other_sudo_metadata: bool,
     doas_user: Option<&OsStr>,
-    has_elevation_metadata: bool,
 ) -> InvocationContext {
     if effective_uid != 0 {
         return InvocationContext::Normal;
     }
-    if !has_elevation_metadata {
-        return InvocationContext::RootSession;
-    }
-    let user = parse_non_root_uid(sudo_uid)
-        .and_then(passwd_by_uid)
-        .or_else(|| doas_user.and_then(passwd_by_name));
+
+    let uid = match agreed_invoking_uid(
+        sudo_identity_claim(sudo_uid, sudo_user, has_other_sudo_metadata),
+        doas_identity_claim(doas_user),
+    ) {
+        Ok(None) => return InvocationContext::RootSession,
+        Ok(Some(uid)) => uid,
+        Err(()) => return InvocationContext::ElevatedUnresolved,
+    };
+    let user = passwd_by_uid(uid);
     let Some(mut user) = user else {
         return InvocationContext::ElevatedUnresolved;
     };
@@ -187,9 +201,60 @@ fn invocation_context(
 }
 
 #[cfg(unix)]
-fn parse_non_root_uid(value: Option<&OsStr>) -> Option<libc::uid_t> {
-    let uid = value?.to_str()?.parse::<libc::uid_t>().ok()?;
-    (uid != 0).then_some(uid)
+fn sudo_identity_claim(
+    sudo_uid: Option<&OsStr>,
+    sudo_user: Option<&OsStr>,
+    has_other_sudo_metadata: bool,
+) -> IdentityClaim {
+    if sudo_uid.is_none() && sudo_user.is_none() && !has_other_sudo_metadata {
+        return IdentityClaim::Absent;
+    }
+    let Some(uid) = parse_uid(sudo_uid) else {
+        return IdentityClaim::Invalid;
+    };
+    if sudo_user.and_then(uid_by_name) != Some(uid) {
+        return IdentityClaim::Invalid;
+    }
+    identity_claim(uid)
+}
+
+#[cfg(unix)]
+fn doas_identity_claim(doas_user: Option<&OsStr>) -> IdentityClaim {
+    match doas_user {
+        None => IdentityClaim::Absent,
+        Some(user) => uid_by_name(user)
+            .map(identity_claim)
+            .unwrap_or(IdentityClaim::Invalid),
+    }
+}
+
+#[cfg(unix)]
+fn identity_claim(uid: libc::uid_t) -> IdentityClaim {
+    if uid == 0 {
+        IdentityClaim::Root
+    } else {
+        IdentityClaim::User(uid)
+    }
+}
+
+#[cfg(unix)]
+fn agreed_invoking_uid(
+    sudo: IdentityClaim,
+    doas: IdentityClaim,
+) -> Result<Option<libc::uid_t>, ()> {
+    use IdentityClaim::{Absent, Root, User};
+
+    match (sudo, doas) {
+        (Absent, Absent | Root) | (Root, Absent | Root) => Ok(None),
+        (User(uid), Absent) | (Absent, User(uid)) => Ok(Some(uid)),
+        (User(sudo_uid), User(doas_uid)) if sudo_uid == doas_uid => Ok(Some(sudo_uid)),
+        _ => Err(()),
+    }
+}
+
+#[cfg(unix)]
+fn parse_uid(value: Option<&OsStr>) -> Option<libc::uid_t> {
+    value?.to_str()?.parse().ok()
 }
 
 #[cfg(unix)]
@@ -200,15 +265,16 @@ fn passwd_by_uid(uid: libc::uid_t) -> Option<InvokingUser> {
 }
 
 #[cfg(unix)]
-fn passwd_by_name(name: &OsStr) -> Option<InvokingUser> {
+fn uid_by_name(name: &OsStr) -> Option<libc::uid_t> {
     let bytes = name.as_bytes();
-    if bytes.is_empty() || bytes == b"root" {
+    if bytes.is_empty() {
         return None;
     }
     let name = CString::new(bytes).ok()?;
     passwd(|record, buffer, len, result| unsafe {
         libc::getpwnam_r(name.as_ptr(), record, buffer, len, result)
     })
+    .map(|user| user.uid)
 }
 
 #[cfg(unix)]
@@ -234,12 +300,7 @@ fn passwd(
             buffer.resize(buffer.len() * 2, 0);
             continue;
         }
-        if status != 0
-            || result.is_null()
-            || record.pw_dir.is_null()
-            || record.pw_name.is_null()
-            || record.pw_uid == 0
-        {
+        if status != 0 || result.is_null() || record.pw_dir.is_null() || record.pw_name.is_null() {
             return None;
         }
         let home = unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes();
@@ -544,46 +605,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sudo_uid_accepts_only_non_root_numeric_ids() {
-        assert_eq!(parse_non_root_uid(Some(OsStr::new("1000"))), Some(1000));
-        assert_eq!(parse_non_root_uid(Some(OsStr::new("0"))), None);
-        assert_eq!(parse_non_root_uid(Some(OsStr::new("paco"))), None);
-        assert_eq!(parse_non_root_uid(None), None);
-    }
-
-    #[test]
-    fn non_root_process_ignores_elevation_metadata() {
-        assert!(matches!(
-            invocation_context(
-                1000,
-                Some(OsStr::new("1001")),
-                Some(OsStr::new("paco")),
-                true,
-            ),
-            InvocationContext::Normal
-        ));
-    }
-
-    #[test]
-    fn root_without_elevation_metadata_is_root_session() {
-        assert!(matches!(
-            invocation_context(0, None, None, false),
-            InvocationContext::RootSession
-        ));
-    }
-
-    #[test]
-    fn elevated_process_resolves_sudo_uid() {
-        let uid = unsafe { libc::getuid() };
-        if uid == 0 {
-            return;
-        }
-        let expected = passwd_by_uid(uid).expect("current user should have a passwd record");
-        let InvocationContext::Elevated(actual) =
-            invocation_context(0, Some(OsStr::new(&uid.to_string())), None, true)
-        else {
-            panic!("current user should resolve as invoking user");
+    fn assert_elevated_user(context: InvocationContext, expected: &InvokingUser) {
+        let InvocationContext::Elevated(actual) = context else {
+            panic!("user should resolve as invoking user");
         };
         assert_eq!(actual.uid, expected.uid);
         assert_eq!(actual.gid, expected.gid);
@@ -593,16 +617,138 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_elevated_context_does_not_become_normal() {
+    fn uid_parser_accepts_root_and_non_root_numeric_ids() {
+        assert_eq!(parse_uid(Some(OsStr::new("1000"))), Some(1000));
+        assert_eq!(parse_uid(Some(OsStr::new("0"))), Some(0));
+        assert_eq!(parse_uid(Some(OsStr::new("paco"))), None);
+        assert_eq!(parse_uid(None), None);
+    }
+
+    #[test]
+    fn non_root_process_ignores_elevation_metadata() {
         assert!(matches!(
             invocation_context(
-                0,
+                1000,
                 Some(OsStr::new("invalid")),
-                Some(OsStr::new("root")),
+                Some(OsStr::new("unknown")),
                 true,
+                Some(OsStr::new("unknown")),
             ),
-            InvocationContext::ElevatedUnresolved
+            InvocationContext::Normal
         ));
+    }
+
+    #[test]
+    fn direct_and_coherent_root_claims_are_root_sessions() {
+        let root = passwd_by_uid(0).expect("root should have a passwd record");
+        for context in [
+            invocation_context(0, None, None, false, None),
+            invocation_context(0, Some(OsStr::new("0")), Some(&root.name), false, None),
+            invocation_context(0, None, None, false, Some(&root.name)),
+            invocation_context(
+                0,
+                Some(OsStr::new("0")),
+                Some(&root.name),
+                false,
+                Some(&root.name),
+            ),
+        ] {
+            assert!(matches!(context, InvocationContext::RootSession));
+        }
+    }
+
+    #[test]
+    fn coherent_non_root_claims_resolve_the_invoking_user() {
+        let uid = unsafe { libc::getuid() };
+        if uid == 0 {
+            return;
+        }
+        let expected = passwd_by_uid(uid).expect("current user should have a passwd record");
+        let uid = uid.to_string();
+        for context in [
+            invocation_context(0, Some(OsStr::new(&uid)), Some(&expected.name), false, None),
+            invocation_context(0, None, None, false, Some(&expected.name)),
+            invocation_context(
+                0,
+                Some(OsStr::new(&uid)),
+                Some(&expected.name),
+                false,
+                Some(&expected.name),
+            ),
+        ] {
+            assert_elevated_user(context, &expected);
+        }
+    }
+
+    #[test]
+    fn sudo_claim_requires_matching_uid_and_user() {
+        let root = passwd_by_uid(0).expect("root should have a passwd record");
+        for (uid, user, other_metadata, expected) in [
+            (
+                Some(OsStr::new("0")),
+                Some(root.name.as_os_str()),
+                false,
+                IdentityClaim::Root,
+            ),
+            (
+                Some(OsStr::new("1")),
+                Some(root.name.as_os_str()),
+                false,
+                IdentityClaim::Invalid,
+            ),
+            (
+                Some(OsStr::new("invalid")),
+                Some(root.name.as_os_str()),
+                false,
+                IdentityClaim::Invalid,
+            ),
+            (Some(OsStr::new("0")), None, false, IdentityClaim::Invalid),
+            (
+                None,
+                Some(root.name.as_os_str()),
+                false,
+                IdentityClaim::Invalid,
+            ),
+            (None, None, true, IdentityClaim::Invalid),
+            (None, None, false, IdentityClaim::Absent),
+        ] {
+            assert_eq!(sudo_identity_claim(uid, user, other_metadata), expected);
+        }
+    }
+
+    #[test]
+    fn doas_claim_resolves_users_by_uid() {
+        let root = passwd_by_uid(0).expect("root should have a passwd record");
+        assert_eq!(doas_identity_claim(Some(&root.name)), IdentityClaim::Root);
+        assert_eq!(doas_identity_claim(None), IdentityClaim::Absent);
+        assert_eq!(
+            doas_identity_claim(Some(OsStr::new("elio-user-that-does-not-exist"))),
+            IdentityClaim::Invalid
+        );
+    }
+
+    #[test]
+    fn identity_claims_must_be_absent_or_coherent() {
+        use IdentityClaim::{Absent, Invalid, Root, User};
+
+        for (sudo, doas, expected) in [
+            (Absent, Absent, Ok(None)),
+            (Root, Absent, Ok(None)),
+            (Absent, Root, Ok(None)),
+            (Root, Root, Ok(None)),
+            (User(1000), Absent, Ok(Some(1000))),
+            (Absent, User(1000), Ok(Some(1000))),
+            (User(1000), User(1000), Ok(Some(1000))),
+            (Root, User(1000), Err(())),
+            (User(1000), Root, Err(())),
+            (User(1000), User(1001), Err(())),
+            (Invalid, User(1000), Err(())),
+            (User(1000), Invalid, Err(())),
+            (Invalid, Absent, Err(())),
+            (Absent, Invalid, Err(())),
+        ] {
+            assert_eq!(agreed_invoking_uid(sudo, doas), expected);
+        }
     }
 
     #[test]
