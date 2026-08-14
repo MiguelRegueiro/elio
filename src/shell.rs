@@ -148,7 +148,8 @@ fn unix_shell_launch(
     inherited_shell: Option<OsString>,
 ) -> Result<(Vec<ShellInvocation>, Option<crate::config::InvokingUser>), String> {
     match context {
-        crate::config::InvocationContext::Normal => {
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => {
             Ok((unix_shell_invocations(inherited_shell), None))
         }
         crate::config::InvocationContext::Elevated(user) => {

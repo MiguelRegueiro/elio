@@ -544,7 +544,7 @@ fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)>
     };
 
     match invoking_user_context() {
-        InvocationContext::Normal => None,
+        InvocationContext::Normal | InvocationContext::RootSession => None,
         InvocationContext::ElevatedUnresolved => Some((
             0,
             vec!["Could not resolve invoking user; nothing was trashed".to_string()],

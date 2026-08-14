@@ -101,7 +101,8 @@ fn xdg_data_home_for_context(
     normal_xdg_data_home: Option<std::ffi::OsString>,
 ) -> Option<std::path::PathBuf> {
     match context {
-        crate::config::InvocationContext::Normal => normal_xdg_data_home
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => normal_xdg_data_home
             .map(std::path::PathBuf::from)
             .or_else(|| dirs::home_dir().map(|home| home.join(".local/share"))),
         crate::config::InvocationContext::Elevated(user) => user
@@ -122,7 +123,8 @@ fn invoking_home_dir_for_context(
     context: &crate::config::InvocationContext,
 ) -> Option<std::path::PathBuf> {
     match context {
-        crate::config::InvocationContext::Normal => dirs::home_dir(),
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => dirs::home_dir(),
         crate::config::InvocationContext::Elevated(user) => Some(user.home.clone()),
         crate::config::InvocationContext::ElevatedUnresolved => None,
     }
@@ -142,7 +144,8 @@ fn invoking_config_home_for_context(
     normal_xdg_config_home: Option<std::ffi::OsString>,
 ) -> Option<std::path::PathBuf> {
     match context {
-        crate::config::InvocationContext::Normal => normal_xdg_config_home
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => normal_xdg_config_home
             .map(std::path::PathBuf::from)
             .or_else(|| dirs::home_dir().map(|home| home.join(".config"))),
         crate::config::InvocationContext::Elevated(user) => user
