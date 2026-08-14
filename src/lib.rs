@@ -4,6 +4,7 @@ mod config;
 mod core;
 mod file_info;
 mod fs;
+mod invoking_user_command;
 mod path_display;
 mod preview;
 mod runtime;
