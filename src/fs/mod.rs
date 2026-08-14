@@ -48,7 +48,7 @@ pub(crate) use item_count::count_directory_items;
 #[cfg(test)]
 pub(crate) use opener::set_open_in_system_capture_for_test;
 pub(crate) use opener::{detached_open_command, open_in_system};
-pub(crate) use places::{build_sidebar_rows, home_dir, trash_dir};
+pub(crate) use places::{build_sidebar_rows, trash_dir};
 pub(crate) use restore::restore_trash_item;
 #[cfg(target_os = "macos")]
 pub(crate) use restore::{remove_restore_origins, save_restore_origins};

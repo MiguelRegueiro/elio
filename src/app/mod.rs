@@ -36,6 +36,9 @@ use std::{
 };
 
 pub use self::state::App;
+
+#[cfg(unix)]
+pub(crate) use self::jobs::run_user_trash_helper;
 #[cfg(test)]
 pub use self::state::PreviewMetricsSnapshot;
 pub(crate) use self::state::{ChooserExit, DuplicateRow, PendingTerminalTask};

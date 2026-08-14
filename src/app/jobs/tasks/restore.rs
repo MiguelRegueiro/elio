@@ -181,7 +181,8 @@ fn run_restore(
             break;
         }
 
-        match crate::fs::restore_trash_item(&target.path) {
+        let restore_result = restore_as_invoking_user(&target.path);
+        match restore_result {
             Ok(_) => {
                 completed += 1;
                 #[cfg(target_os = "macos")]
@@ -203,6 +204,35 @@ fn run_restore(
     }
 
     (completed, errors, stopped_early)
+}
+
+fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use crate::{
+            config::{InvocationContext, invoking_user_context},
+            user_fs_helper::Request,
+        };
+        match invoking_user_context() {
+            InvocationContext::Normal => {}
+            InvocationContext::ElevatedUnresolved => {
+                anyhow::bail!("could not resolve invoking user; nothing was restored")
+            }
+            InvocationContext::Elevated(user) => {
+                let response = super::super::invoking_user_fs::run(
+                    &user,
+                    &Request::Restore(path.to_path_buf()),
+                )
+                .map_err(anyhow::Error::msg)?;
+                if let Some(error) = response.error {
+                    anyhow::bail!(error);
+                }
+                anyhow::ensure!(response.completed == 1, "helper did not restore the item");
+                return Ok(());
+            }
+        }
+    }
+    crate::fs::restore_trash_item(path)
 }
 
 /// Send a throttled intermediate progress result.  Returns `false` if the
