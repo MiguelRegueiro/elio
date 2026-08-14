@@ -511,6 +511,7 @@ fn invalid_editor_bulk_rename_aborts_without_review_overlay() {
     let session = BulkRenameEditorSession {
         root: root.clone(),
         temp_path: temp_file.clone(),
+        expected_temp_owner: None,
         items: vec![BulkRenameItem {
             path: file.clone(),
             original_name: "alpha.txt".to_string(),
@@ -561,6 +562,7 @@ fn finish_editor_bulk_rename_opens_confirmation_with_relative_paths() {
     let session = BulkRenameEditorSession {
         root: root.clone(),
         temp_path: temp_file.clone(),
+        expected_temp_owner: None,
         items: vec![
             BulkRenameItem {
                 path: alpha.clone(),

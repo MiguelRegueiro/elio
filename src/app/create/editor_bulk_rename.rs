@@ -9,14 +9,21 @@ use crate::fs::rect_contains;
 use anyhow::Context;
 use anyhow::{Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-#[cfg(unix)]
-use std::env;
 use std::{
     collections::HashSet,
     fs,
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(unix)]
+use std::{
+    env,
+    io::{Read, Write},
+    os::unix::{fs::OpenOptionsExt, io::AsRawFd},
+};
+
+#[cfg(unix)]
+const MAX_EDITOR_RENAME_BYTES: u64 = 1024 * 1024;
 
 impl App {
     #[cfg(unix)]
@@ -48,7 +55,10 @@ impl App {
             );
         }
 
-        let temp_path = create_temp_file(&rows)?;
+        let context = crate::config::invoking_user_context();
+        let invoking_user = editor_temp_owner(&context)?;
+        let expected_temp_owner = invoking_user.map(|(uid, _)| uid);
+        let temp_path = create_temp_file(&rows, invoking_user)?;
         let (program, mut args) = editor_command();
         args.push(temp_path.to_string_lossy().into_owned());
 
@@ -59,6 +69,7 @@ impl App {
             session: BulkRenameEditorSession {
                 root,
                 temp_path,
+                expected_temp_owner,
                 items: selected_paths
                     .into_iter()
                     .map(bulk_rename_item_from_path)
@@ -84,6 +95,7 @@ impl App {
         let BulkRenameEditorSession {
             root,
             temp_path,
+            expected_temp_owner,
             items,
         } = session;
 
@@ -104,7 +116,7 @@ impl App {
                 }
             }
 
-            let edited = fs::read_to_string(&temp_path)
+            let edited = read_editor_rename_file(&temp_path, expected_temp_owner)
                 .with_context(|| format!("failed to read {}", temp_path.display()))?;
             let mut new_rows: Vec<String> = edited.lines().map(str::to_owned).collect();
             if edited.ends_with('\n') && new_rows.last().is_some_and(String::is_empty) {
@@ -751,8 +763,29 @@ fn common_root(paths: &[PathBuf]) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn create_temp_file(rows: &[String]) -> Result<PathBuf> {
-    let base = env::temp_dir();
+fn editor_temp_owner(
+    context: &crate::config::InvocationContext,
+) -> Result<Option<(libc::uid_t, libc::gid_t)>> {
+    match context {
+        crate::config::InvocationContext::Normal
+        | crate::config::InvocationContext::RootSession => Ok(None),
+        crate::config::InvocationContext::Elevated(user) => Ok(Some((user.uid, user.gid))),
+        crate::config::InvocationContext::ElevatedUnresolved => {
+            bail!("could not resolve invoking user")
+        }
+    }
+}
+
+#[cfg(unix)]
+fn create_temp_file(
+    rows: &[String],
+    invoking_user: Option<(libc::uid_t, libc::gid_t)>,
+) -> Result<PathBuf> {
+    let base = if invoking_user.is_some() {
+        PathBuf::from("/tmp")
+    } else {
+        env::temp_dir()
+    };
     for attempt in 0..1000u32 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -762,15 +795,31 @@ fn create_temp_file(rows: &[String]) -> Result<PathBuf> {
             "elio-bulk-rename-{}-{now}-{attempt}.txt",
             std::process::id()
         ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        if invoking_user.is_some() {
+            options.mode(0o600);
+        }
+        match options.open(&path) {
             Ok(mut file) => {
-                use std::io::Write;
-                file.write_all(rows.join("\n").as_bytes())?;
-                file.write_all(b"\n")?;
+                let result = (|| -> Result<()> {
+                    file.write_all(rows.join("\n").as_bytes())?;
+                    file.write_all(b"\n")?;
+                    if let Some((uid, gid)) = invoking_user {
+                        if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
+                            return Err(std::io::Error::last_os_error().into());
+                        }
+                        if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+                            return Err(std::io::Error::last_os_error().into());
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    drop(file);
+                    let _ = fs::remove_file(&path);
+                    return Err(error);
+                }
                 return Ok(path);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -781,9 +830,46 @@ fn create_temp_file(rows: &[String]) -> Result<PathBuf> {
 }
 
 #[cfg(unix)]
+fn read_editor_rename_file(path: &Path, expected_owner: Option<libc::uid_t>) -> Result<String> {
+    let Some(expected_owner) = expected_owner else {
+        return Ok(fs::read_to_string(path)?);
+    };
+
+    use std::os::unix::fs::MetadataExt;
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        bail!("edited rename document is not a regular file");
+    }
+    if metadata.uid() != expected_owner {
+        bail!("edited rename document has unexpected owner");
+    }
+    if metadata.mode() & 0o022 != 0 {
+        bail!("edited rename document is writable by another user");
+    }
+    if metadata.len() > MAX_EDITOR_RENAME_BYTES {
+        bail!("edited rename document is too large");
+    }
+
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_EDITOR_RENAME_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_EDITOR_RENAME_BYTES {
+        bail!("edited rename document is too large");
+    }
+    String::from_utf8(bytes).context("edited rename document is not valid UTF-8")
+}
+
+#[cfg(unix)]
 fn editor_command() -> (String, Vec<String>) {
     for key in ["VISUAL", "EDITOR"] {
-        if let Some(value) = env::var_os(key).and_then(|value| value.into_string().ok()) {
+        if let Some(value) =
+            crate::config::invoking_user_env_var(key).and_then(|value| value.into_string().ok())
+        {
             let tokens = crate::app::open_rules::tokenize_command(&value);
             if let Some((program, args)) = split_program_args(tokens) {
                 return (program, args);
@@ -810,6 +896,95 @@ mod tests {
             original_name: path_name(path),
             is_dir,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unresolved_elevation_cannot_prepare_editor_document() {
+        assert!(editor_temp_owner(&crate::config::InvocationContext::ElevatedUnresolved).is_err());
+        assert!(
+            editor_temp_owner(&crate::config::InvocationContext::Normal)
+                .expect("normal session should be accepted")
+                .is_none()
+        );
+        assert!(
+            editor_temp_owner(&crate::config::InvocationContext::RootSession)
+                .expect("root session should be accepted")
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoking_user_editor_document_is_private_and_readable() {
+        use std::os::unix::fs::MetadataExt;
+
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        let path = create_temp_file(&["alpha.txt".to_string()], Some((uid, gid)))
+            .expect("failed to create invoking-user editor document");
+        let metadata = fs::metadata(&path).expect("failed to stat editor document");
+
+        assert!(path.is_absolute());
+        assert_eq!(path.parent(), Some(Path::new("/tmp")));
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.gid(), gid);
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        assert_eq!(
+            read_editor_rename_file(&path, Some(uid)).expect("failed to read editor document"),
+            "alpha.txt\n"
+        );
+        fs::remove_file(path).expect("failed to remove editor document");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoking_user_editor_document_accepts_atomic_save_replacement() {
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        let path = create_temp_file(&["alpha.txt".to_string()], Some((uid, gid)))
+            .expect("failed to create invoking-user editor document");
+        let replacement = path.with_extension("replacement");
+        fs::write(&replacement, "renamed.txt\n").expect("failed to write replacement document");
+        fs::rename(&replacement, &path).expect("failed to replace editor document");
+
+        assert_eq!(
+            read_editor_rename_file(&path, Some(uid)).expect("failed to read replacement document"),
+            "renamed.txt\n"
+        );
+        fs::remove_file(path).expect("failed to remove editor document");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoking_user_editor_document_rejects_symlinks_and_oversized_files() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        let path = create_temp_file(&["alpha.txt".to_string()], Some((uid, gid)))
+            .expect("failed to create invoking-user editor document");
+        let target = path.with_extension("target");
+        fs::write(&target, "renamed.txt\n").expect("failed to write symlink target");
+        fs::remove_file(&path).expect("failed to remove editor document");
+        symlink(&target, &path).expect("failed to create editor document symlink");
+        assert!(read_editor_rename_file(&path, Some(uid)).is_err());
+        fs::remove_file(&path).expect("failed to remove editor document symlink");
+        fs::remove_file(target).expect("failed to remove symlink target");
+
+        let path = create_temp_file(&["alpha.txt".to_string()], Some((uid, gid)))
+            .expect("failed to create invoking-user editor document");
+        fs::write(&path, vec![b'a'; MAX_EDITOR_RENAME_BYTES as usize + 1])
+            .expect("failed to write oversized editor document");
+        assert!(read_editor_rename_file(&path, Some(uid)).is_err());
+        fs::remove_file(path).expect("failed to remove oversized editor document");
+
+        let path = create_temp_file(&["alpha.txt".to_string()], Some((uid, gid)))
+            .expect("failed to create invoking-user editor document");
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o622))
+            .expect("failed to make editor document world-writable");
+        assert!(read_editor_rename_file(&path, Some(uid)).is_err());
+        fs::remove_file(path).expect("failed to remove world-writable editor document");
     }
 
     #[test]
