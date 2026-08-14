@@ -76,7 +76,7 @@ pub(super) fn xdg_data_dirs() -> Vec<std::path::PathBuf> {
     let context = crate::config::invoking_user_context();
 
     if let Some(data_home) = xdg_data_home_for_context(
-        &context,
+        context,
         crate::config::invoking_user_env_var("XDG_DATA_HOME"),
     ) && !data_home.as_os_str().is_empty()
     {
@@ -115,7 +115,7 @@ fn xdg_data_home_for_context(
 
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn invoking_home_dir() -> Option<std::path::PathBuf> {
-    invoking_home_dir_for_context(&crate::config::invoking_user_context())
+    invoking_home_dir_for_context(crate::config::invoking_user_context())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -133,7 +133,7 @@ fn invoking_home_dir_for_context(
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn invoking_config_home() -> Option<std::path::PathBuf> {
     invoking_config_home_for_context(
-        &crate::config::invoking_user_context(),
+        crate::config::invoking_user_context(),
         crate::config::invoking_user_env_var("XDG_CONFIG_HOME"),
     )
 }

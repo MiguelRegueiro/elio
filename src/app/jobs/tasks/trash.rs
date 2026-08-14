@@ -552,7 +552,7 @@ fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)>
         )),
         InvocationContext::Elevated(user) => {
             let owned = paths.iter().map(|path| (*path).to_path_buf()).collect();
-            let response = super::super::invoking_user_fs::run(&user, &Request::Trash(owned));
+            let response = super::super::invoking_user_fs::run(user, &Request::Trash(owned));
             Some(match response {
                 Ok(response) => (
                     response.completed,

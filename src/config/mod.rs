@@ -53,6 +53,9 @@ struct ConfigFile {
 }
 
 pub(crate) fn initialize() {
+    #[cfg(unix)]
+    // Snapshot the invocation context before loading config or starting workers.
+    let _ = invoking_user::context();
     loading::initialize();
 }
 

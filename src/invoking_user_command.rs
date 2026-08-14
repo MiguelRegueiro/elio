@@ -22,7 +22,7 @@ pub(crate) fn prepare_external(command: &mut Command, cwd: Option<&Path>) -> io:
 #[cfg(unix)]
 fn prepare_external_for_context(
     command: &mut Command,
-    context: crate::config::InvocationContext,
+    context: &crate::config::InvocationContext,
     cwd: Option<&Path>,
 ) -> io::Result<()> {
     match context {
@@ -30,7 +30,7 @@ fn prepare_external_for_context(
         | crate::config::InvocationContext::RootSession => Ok(()),
         crate::config::InvocationContext::Elevated(user) => {
             let cwd = cwd.unwrap_or(&user.home);
-            prepare(command, &user, Some(cwd))
+            prepare(command, user, Some(cwd))
         }
         crate::config::InvocationContext::ElevatedUnresolved => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -375,7 +375,7 @@ mod tests {
         let mut command = Command::new("true");
         prepare_external_for_context(
             &mut command,
-            crate::config::InvocationContext::Normal,
+            &crate::config::InvocationContext::Normal,
             Some(Path::new("/ignored")),
         )
         .unwrap();
@@ -389,7 +389,7 @@ mod tests {
         let mut command = Command::new("true");
         prepare_external_for_context(
             &mut command,
-            crate::config::InvocationContext::Elevated(test_user()),
+            &crate::config::InvocationContext::Elevated(test_user()),
             None,
         )
         .unwrap();
@@ -409,7 +409,7 @@ mod tests {
         let mut command = Command::new("true");
         prepare_external_for_context(
             &mut command,
-            crate::config::InvocationContext::Elevated(test_user()),
+            &crate::config::InvocationContext::Elevated(test_user()),
             Some(Path::new("/home/paco/Documents")),
         )
         .unwrap();
@@ -425,7 +425,7 @@ mod tests {
         let mut command = Command::new("true");
         let error = prepare_external_for_context(
             &mut command,
-            crate::config::InvocationContext::ElevatedUnresolved,
+            &crate::config::InvocationContext::ElevatedUnresolved,
             None,
         )
         .unwrap_err();

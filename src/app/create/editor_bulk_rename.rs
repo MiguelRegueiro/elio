@@ -56,7 +56,7 @@ impl App {
         }
 
         let context = crate::config::invoking_user_context();
-        let invoking_user = editor_temp_owner(&context)?;
+        let invoking_user = editor_temp_owner(context)?;
         let expected_temp_owner = invoking_user.map(|(uid, _)| uid);
         let temp_path = create_temp_file(&rows, invoking_user)?;
         let (program, mut args) = editor_command();
