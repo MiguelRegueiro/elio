@@ -123,7 +123,7 @@ fn single_discovered_app_launch_failure_sets_status_without_overlay() {
         app.overlays.open_with.is_none(),
         "overlay must remain closed"
     );
-    assert_eq!(app.status, "Failed to open with Ghost App");
+    assert_eq!(app.status, "Failed to open with Ghost App: missing");
 
     fs::remove_dir_all(root).ok();
 }

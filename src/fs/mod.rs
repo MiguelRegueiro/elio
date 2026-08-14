@@ -45,6 +45,8 @@ pub(crate) use format::{
     rect_contains, sanitize_terminal_text, symlink_target_display_label,
 };
 pub(crate) use item_count::count_directory_items;
+#[cfg(target_os = "macos")]
+pub(crate) use opener::detached_open;
 #[cfg(test)]
 pub(crate) use opener::set_open_in_system_capture_for_test;
 pub(crate) use opener::{detached_open_command, open_in_system};

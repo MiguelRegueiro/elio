@@ -9,6 +9,35 @@ use std::{
     process::Command,
 };
 
+/// Applies the identity policy for user-facing external applications.
+///
+/// Normal launches are left untouched. Elevated launches run as the invoking
+/// user, use `cwd` when the action has an explicit directory, and otherwise
+/// start from that user's home. Unresolved elevated identity fails closed.
+#[cfg(unix)]
+pub(crate) fn prepare_external(command: &mut Command, cwd: Option<&Path>) -> io::Result<()> {
+    prepare_external_for_context(command, crate::config::invoking_user_context(), cwd)
+}
+
+#[cfg(unix)]
+fn prepare_external_for_context(
+    command: &mut Command,
+    context: crate::config::InvocationContext,
+    cwd: Option<&Path>,
+) -> io::Result<()> {
+    match context {
+        crate::config::InvocationContext::Normal => Ok(()),
+        crate::config::InvocationContext::Elevated(user) => {
+            let cwd = cwd.unwrap_or(&user.home);
+            prepare(command, &user, Some(cwd))
+        }
+        crate::config::InvocationContext::ElevatedUnresolved => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "could not resolve invoking user",
+        )),
+    }
+}
+
 #[cfg(unix)]
 pub(crate) fn prepare(
     command: &mut Command,
@@ -62,26 +91,59 @@ fn apply_user_environment(command: &mut Command, user: &InvokingUser) {
         .env_remove("SUDO_GID")
         .env_remove("SUDO_UID")
         .env_remove("SUDO_USER")
-        .env_remove("DOAS_USER")
-        .env_remove("XDG_CACHE_HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME");
+        .env_remove("DOAS_USER");
 
+    for name in crate::config::SESSION_ENVIRONMENT_KEYS {
+        command.env_remove(name);
+    }
+    for (name, value) in &user.session_environment {
+        if !matches!(
+            name.to_str(),
+            Some(
+                "XAUTHORITY"
+                    | "XDG_CACHE_HOME"
+                    | "XDG_CONFIG_HOME"
+                    | "XDG_DATA_HOME"
+                    | "XDG_RUNTIME_DIR"
+            )
+        ) {
+            command.env(name, value);
+        }
+    }
+
+    if let Some(path) = &user.xdg_config_home {
+        command.env("XDG_CONFIG_HOME", path);
+    }
     if let Some(path) = &user.xdg_data_home {
         command.env("XDG_DATA_HOME", path);
     }
-    preserve_owned_absolute_env(command, "XDG_CONFIG_HOME", user.uid);
-    preserve_owned_absolute_env(command, "XDG_CACHE_HOME", user.uid);
-    if !valid_runtime_dir(std::env::var_os("XDG_RUNTIME_DIR").as_deref(), user.uid) {
-        command.env_remove("XDG_RUNTIME_DIR");
+    set_owned_absolute_env(command, user, "XDG_CACHE_HOME");
+    set_owned_path_env(command, user, "XAUTHORITY");
+    if let Some(path) = crate::config::user_environment_value(user, "XDG_RUNTIME_DIR")
+        && valid_runtime_dir(Some(path), user.uid)
+    {
+        command.env("XDG_RUNTIME_DIR", path);
     }
 }
 
 #[cfg(unix)]
-fn preserve_owned_absolute_env(command: &mut Command, name: &str, uid: libc::uid_t) {
-    if let Some(path) = std::env::var_os(name)
+fn set_owned_absolute_env(command: &mut Command, user: &InvokingUser, name: &str) {
+    if let Some(path) = crate::config::user_environment_value(user, name)
         .map(PathBuf::from)
-        .filter(|path| valid_owned_absolute_path(path, uid))
+        .filter(|path| valid_owned_absolute_path(path, user.uid))
+    {
+        command.env(name, path);
+    }
+}
+
+#[cfg(unix)]
+fn set_owned_path_env(command: &mut Command, user: &InvokingUser, name: &str) {
+    use std::os::unix::fs::MetadataExt;
+
+    if let Some(path) = crate::config::user_environment_value(user, name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .filter(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.uid() == user.uid))
     {
         command.env(name, path);
     }
@@ -184,6 +246,23 @@ mod tests {
             home: PathBuf::from("/home/paco"),
             shell: OsString::from("/bin/fish"),
             groups: vec![1000],
+            session_environment: vec![
+                (
+                    OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                    OsString::from("unix:path=/run/user/1000/bus"),
+                ),
+                (OsString::from("DISPLAY"), OsString::from(":1")),
+                (OsString::from("EDITOR"), OsString::from("nvim")),
+                (
+                    OsString::from("PATH"),
+                    OsString::from("/home/paco/.local/bin:/usr/bin"),
+                ),
+                (
+                    OsString::from("WAYLAND_DISPLAY"),
+                    OsString::from("wayland-1"),
+                ),
+            ],
+            xdg_config_home: Some(PathBuf::from("/home/paco/.config")),
             xdg_data_home: Some(PathBuf::from("/home/paco/.local/share")),
         }
     }
@@ -229,6 +308,38 @@ mod tests {
             command_env(&command, "XDG_DATA_HOME"),
             Some(Some(OsString::from("/home/paco/.local/share")))
         );
+        assert_eq!(
+            command_env(&command, "XDG_CONFIG_HOME"),
+            Some(Some(OsString::from("/home/paco/.config")))
+        );
+        assert_eq!(
+            command_env(&command, "DISPLAY"),
+            Some(Some(OsString::from(":1")))
+        );
+        assert_eq!(
+            command_env(&command, "WAYLAND_DISPLAY"),
+            Some(Some(OsString::from("wayland-1")))
+        );
+        assert_eq!(
+            command_env(&command, "EDITOR"),
+            Some(Some(OsString::from("nvim")))
+        );
+    }
+
+    #[test]
+    fn absent_invoking_user_session_values_remove_root_values() {
+        let mut user = test_user();
+        user.session_environment.clear();
+        let mut command = Command::new("true");
+        apply_user_environment(&mut command, &user);
+
+        assert_eq!(command_env(&command, "DISPLAY"), Some(None));
+        assert_eq!(command_env(&command, "WAYLAND_DISPLAY"), Some(None));
+        assert_eq!(
+            command_env(&command, "DBUS_SESSION_BUS_ADDRESS"),
+            Some(None)
+        );
+        assert_eq!(command_env(&command, "EDITOR"), Some(None));
     }
 
     #[test]
@@ -256,6 +367,70 @@ mod tests {
             command_env(&command, "PWD"),
             Some(Some(OsString::from("/home/paco/Documents")))
         );
+    }
+
+    #[test]
+    fn normal_external_command_is_left_unchanged() {
+        let mut command = Command::new("true");
+        prepare_external_for_context(
+            &mut command,
+            crate::config::InvocationContext::Normal,
+            Some(Path::new("/ignored")),
+        )
+        .unwrap();
+
+        assert_eq!(command.get_current_dir(), None);
+        assert_eq!(command_env(&command, "HOME"), None);
+    }
+
+    #[test]
+    fn elevated_detached_command_uses_invoking_user_home() {
+        let mut command = Command::new("true");
+        prepare_external_for_context(
+            &mut command,
+            crate::config::InvocationContext::Elevated(test_user()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            command_env(&command, "PWD"),
+            Some(Some(OsString::from("/home/paco")))
+        );
+        assert_eq!(
+            command_env(&command, "HOME"),
+            Some(Some(OsString::from("/home/paco")))
+        );
+    }
+
+    #[test]
+    fn elevated_external_command_uses_requested_working_directory() {
+        let mut command = Command::new("true");
+        prepare_external_for_context(
+            &mut command,
+            crate::config::InvocationContext::Elevated(test_user()),
+            Some(Path::new("/home/paco/Documents")),
+        )
+        .unwrap();
+
+        assert_eq!(
+            command_env(&command, "PWD"),
+            Some(Some(OsString::from("/home/paco/Documents")))
+        );
+    }
+
+    #[test]
+    fn unresolved_elevated_external_command_fails_closed() {
+        let mut command = Command::new("true");
+        let error = prepare_external_for_context(
+            &mut command,
+            crate::config::InvocationContext::ElevatedUnresolved,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "could not resolve invoking user");
     }
 
     #[test]

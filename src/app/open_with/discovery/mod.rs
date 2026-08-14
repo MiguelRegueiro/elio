@@ -73,20 +73,19 @@ fn discover_open_with_apps_inner(
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn xdg_data_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
+    let context = crate::config::invoking_user_context();
 
-    let data_home = std::env::var("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .map(|h| h.join(".local/share"))
-                .unwrap_or_default()
-        });
-    if !data_home.as_os_str().is_empty() {
+    if let Some(data_home) = xdg_data_home_for_context(
+        &context,
+        crate::config::invoking_user_env_var("XDG_DATA_HOME"),
+    ) && !data_home.as_os_str().is_empty()
+    {
         dirs.push(data_home);
     }
 
-    for entry in std::env::var("XDG_DATA_DIRS")
-        .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string())
+    for entry in crate::config::invoking_user_env_var("XDG_DATA_DIRS")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string())
         .split(':')
         .filter(|s| !s.is_empty())
     {
@@ -96,11 +95,70 @@ pub(super) fn xdg_data_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+fn xdg_data_home_for_context(
+    context: &crate::config::InvocationContext,
+    normal_xdg_data_home: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    match context {
+        crate::config::InvocationContext::Normal => normal_xdg_data_home
+            .map(std::path::PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".local/share"))),
+        crate::config::InvocationContext::Elevated(user) => user
+            .xdg_data_home
+            .clone()
+            .or_else(|| Some(user.home.join(".local/share"))),
+        crate::config::InvocationContext::ElevatedUnresolved => None,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn invoking_home_dir() -> Option<std::path::PathBuf> {
+    invoking_home_dir_for_context(&crate::config::invoking_user_context())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn invoking_home_dir_for_context(
+    context: &crate::config::InvocationContext,
+) -> Option<std::path::PathBuf> {
+    match context {
+        crate::config::InvocationContext::Normal => dirs::home_dir(),
+        crate::config::InvocationContext::Elevated(user) => Some(user.home.clone()),
+        crate::config::InvocationContext::ElevatedUnresolved => None,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn invoking_config_home() -> Option<std::path::PathBuf> {
+    invoking_config_home_for_context(
+        &crate::config::invoking_user_context(),
+        crate::config::invoking_user_env_var("XDG_CONFIG_HOME"),
+    )
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn invoking_config_home_for_context(
+    context: &crate::config::InvocationContext,
+    normal_xdg_config_home: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    match context {
+        crate::config::InvocationContext::Normal => normal_xdg_config_home
+            .map(std::path::PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".config"))),
+        crate::config::InvocationContext::Elevated(user) => user
+            .xdg_config_home
+            .clone()
+            .or_else(|| Some(user.home.join(".config"))),
+        crate::config::InvocationContext::ElevatedUnresolved => None,
+    }
+}
+
 /// Returns the desktop names from `$XDG_CURRENT_DESKTOP` (colon-separated,
 /// original case).  Empty when the variable is unset or empty.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn current_desktops() -> Vec<String> {
-    std::env::var("XDG_CURRENT_DESKTOP")
+    crate::config::invoking_user_env_var("XDG_CURRENT_DESKTOP")
+        .and_then(|value| value.into_string().ok())
         .unwrap_or_default()
         .split(':')
         .filter(|s| !s.is_empty())
@@ -156,4 +214,58 @@ fn discover_xdg_for_mime(
         editor::append_editor_fallback(&mut apps, path, require_text_like_editor);
     }
     apps
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod tests {
+    use std::{ffi::OsString, path::PathBuf};
+
+    use super::*;
+
+    fn test_user() -> crate::config::InvokingUser {
+        crate::config::InvokingUser {
+            uid: 1000,
+            gid: 1000,
+            name: OsString::from("paco"),
+            home: PathBuf::from("/home/paco"),
+            shell: OsString::from("/bin/sh"),
+            groups: vec![1000],
+            session_environment: Vec::new(),
+            xdg_config_home: Some(PathBuf::from("/home/paco/config")),
+            xdg_data_home: Some(PathBuf::from("/home/paco/data")),
+        }
+    }
+
+    #[test]
+    fn elevated_discovery_uses_invoking_user_directories() {
+        let context = crate::config::InvocationContext::Elevated(test_user());
+
+        assert_eq!(
+            invoking_home_dir_for_context(&context),
+            Some(PathBuf::from("/home/paco"))
+        );
+        assert_eq!(
+            xdg_data_home_for_context(&context, Some(OsString::from("/root/data"))),
+            Some(PathBuf::from("/home/paco/data"))
+        );
+        assert_eq!(
+            invoking_config_home_for_context(&context, Some(OsString::from("/root/config")),),
+            Some(PathBuf::from("/home/paco/config"))
+        );
+    }
+
+    #[test]
+    fn unresolved_elevated_discovery_omits_user_directories() {
+        let context = crate::config::InvocationContext::ElevatedUnresolved;
+
+        assert_eq!(invoking_home_dir_for_context(&context), None);
+        assert_eq!(
+            xdg_data_home_for_context(&context, Some(OsString::from("/root/data"))),
+            None
+        );
+        assert_eq!(
+            invoking_config_home_for_context(&context, Some(OsString::from("/root/config")),),
+            None
+        );
+    }
 }

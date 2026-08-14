@@ -288,6 +288,8 @@ mod tests {
             home: "/home/paco".into(),
             shell: OsString::from(shell),
             groups: vec![1000],
+            session_environment: Vec::new(),
+            xdg_config_home: None,
             xdg_data_home: None,
         }
     }

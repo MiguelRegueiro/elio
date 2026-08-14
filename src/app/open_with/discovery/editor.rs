@@ -1,7 +1,10 @@
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
+
+#[cfg(test)]
+use std::env;
 
 use super::super::super::state::OpenWithApp;
 use super::exec::tokenize_exec;
@@ -39,7 +42,8 @@ pub(super) fn editor_fallback_for_path(path: &Path) -> Option<OpenWithApp> {
 }
 
 pub(super) fn editor_app_for_path(var: &'static str, path: &Path) -> Option<OpenWithApp> {
-    let value = env::var_os(var).and_then(|value| value.into_string().ok())?;
+    let value =
+        crate::config::invoking_user_env_var(var).and_then(|value| value.into_string().ok())?;
     editor_app_from_command(var, &value, path)
 }
 
@@ -134,8 +138,8 @@ pub(super) fn resolve_executable(program: &str) -> Option<PathBuf> {
         return executable_file_exists(program_path).then(|| canonical_path(program_path));
     }
 
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths)
+    crate::config::invoking_user_env_var("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
             .map(|dir| dir.join(program))
             .find(|path| executable_file_exists(path))
             .map(|path| canonical_path(&path))

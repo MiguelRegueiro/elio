@@ -111,7 +111,9 @@ impl App {
         } else {
             match detached_open_command(&program, &args) {
                 Ok(()) => self.status.clear(),
-                Err(_) => self.status = format!("Failed to open with {display_name}"),
+                Err(error) => {
+                    self.status = format!("Failed to open with {display_name}: {error}");
+                }
             }
         }
 
@@ -158,7 +160,10 @@ impl App {
                 } else {
                     match launch_app(&app) {
                         Ok(()) => self.status = format!("Opened with {}", app.display_name),
-                        Err(_) => self.status = format!("Failed to open with {}", app.display_name),
+                        Err(error) => {
+                            self.status =
+                                format!("Failed to open with {}: {error}", app.display_name);
+                        }
                     }
                 }
             }
@@ -261,21 +266,7 @@ fn open_with_fallback(path: &Path) -> std::result::Result<FallbackOpenOutcome, S
 
 #[cfg(target_os = "macos")]
 fn open_in_text_editor(path: &Path) -> std::result::Result<(), String> {
-    use std::process::{Command, Stdio};
-
-    let status = Command::new("open")
-        .arg("-t")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("open: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("open exited with {status}"))
-    }
+    crate::fs::detached_open("open", &["-t"], path).map_err(|error| format!("open: {error}"))
 }
 
 // ── Test seam ─────────────────────────────────────────────────────────────────
