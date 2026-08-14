@@ -196,7 +196,11 @@ fn invocation_context(
     user.session_environment = invoking_user_environment(user.uid);
     user.xdg_config_home =
         validated_xdg_home(user_environment_value(&user, "XDG_CONFIG_HOME"), &user);
-    user.xdg_data_home = validated_xdg_home(user_environment_value(&user, "XDG_DATA_HOME"), &user);
+    #[cfg(not(target_os = "macos"))]
+    {
+        user.xdg_data_home =
+            validated_xdg_home(user_environment_value(&user, "XDG_DATA_HOME"), &user);
+    }
     InvocationContext::Elevated(user)
 }
 
@@ -331,7 +335,7 @@ fn passwd(
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 fn validated_xdg_home(value: Option<&OsStr>, user: &InvokingUser) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
 
@@ -347,11 +351,6 @@ fn validated_xdg_home(value: Option<&OsStr>, user: &InvokingUser) -> Option<Path
                 })
                 == Some(true)
         })
-}
-
-#[cfg(target_os = "macos")]
-fn validated_xdg_home(_value: Option<&OsStr>, _user: &InvokingUser) -> Option<PathBuf> {
-    None
 }
 
 #[cfg(unix)]
@@ -622,6 +621,38 @@ mod tests {
         assert_eq!(parse_uid(Some(OsStr::new("0"))), Some(0));
         assert_eq!(parse_uid(Some(OsStr::new("paco"))), None);
         assert_eq!(parse_uid(None), None);
+    }
+
+    #[test]
+    fn invoking_user_xdg_home_rejects_untrusted_paths() {
+        let user = test_user();
+        assert_eq!(
+            validated_xdg_home(Some(OsStr::new("relative/config")), &user),
+            None
+        );
+        assert_eq!(
+            validated_xdg_home(Some(OsStr::new("/root/custom")), &user),
+            None
+        );
+    }
+
+    #[test]
+    fn invoking_user_xdg_home_accepts_user_owned_absolute_path() {
+        let uid = unsafe { libc::geteuid() };
+        let user = passwd_by_uid(uid).expect("current user should have a passwd record");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should follow the Unix epoch")
+            .as_nanos();
+        let base =
+            std::env::temp_dir().join(format!("elio-xdg-home-{}-{unique}", std::process::id()));
+        std::fs::create_dir(&base).expect("failed to create user-owned XDG test directory");
+        let candidate = base.join("config");
+
+        let actual = validated_xdg_home(Some(candidate.as_os_str()), &user);
+
+        std::fs::remove_dir(base).expect("failed to remove XDG test directory");
+        assert_eq!(actual, Some(candidate));
     }
 
     #[test]
