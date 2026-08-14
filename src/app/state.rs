@@ -227,6 +227,7 @@ pub(super) struct BulkRenameItem {
 pub(crate) struct BulkRenameEditorSession {
     pub(crate) root: PathBuf,
     pub(crate) temp_path: PathBuf,
+    pub(crate) expected_temp_owner: Option<libc::uid_t>,
     pub(super) items: Vec<BulkRenameItem>,
 }
 

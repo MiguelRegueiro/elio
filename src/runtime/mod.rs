@@ -138,11 +138,24 @@ fn run_open_command_in_terminal(
 }
 
 #[cfg(unix)]
+struct EditorTempCleanup(PathBuf);
+
+#[cfg(unix)]
+impl Drop for EditorTempCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(unix)]
 fn run_blocking_in_terminal_result(
     program: &str,
     args: &[String],
 ) -> std::io::Result<std::process::ExitStatus> {
-    Command::new(program).args(args).status()
+    let mut command = Command::new(program);
+    command.args(args);
+    crate::invoking_user_command::prepare_external(&mut command, None)?;
+    command.status()
 }
 
 fn refresh_after_shell(app: &mut App, cwd: &Path) {
@@ -489,6 +502,7 @@ fn run_app(
                         args,
                         session,
                     } => {
+                        let _temp_cleanup = EditorTempCleanup(session.temp_path.clone());
                         pause_runtime_input(&input_reader, true);
                         suspend_terminal(terminal, drainer, true, kitty_dnd)?;
                         let result = run_blocking_in_terminal_result(&program, &args);
@@ -1008,7 +1022,7 @@ mod tests {
         event_poll_interval,
     };
     #[cfg(unix)]
-    use super::{drag_icon_label_with, unsupported_drop_scheme_status};
+    use super::{EditorTempCleanup, drag_icon_label_with, unsupported_drop_scheme_status};
     use crossterm::event::Event;
     use std::time::Duration;
     #[cfg(unix)]
@@ -1073,6 +1087,24 @@ mod tests {
         assert!(!event_implies_terminal_focus(&Event::FocusLost));
         assert!(!event_implies_terminal_focus(&Event::FocusGained));
         assert!(!event_implies_terminal_focus(&Event::Resize(80, 24)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editor_temp_cleanup_removes_document_on_drop() {
+        let path = std::env::temp_dir().join(format!(
+            "elio-editor-cleanup-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::write(&path, "alpha.txt\n").expect("failed to create editor temp document");
+        {
+            let _cleanup = EditorTempCleanup(path.clone());
+        }
+        assert!(!path.exists());
     }
 
     #[cfg(unix)]
