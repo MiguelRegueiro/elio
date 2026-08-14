@@ -12,12 +12,16 @@ const MAX_ITEMS: usize = 16_384;
 const MAX_PATH_BYTES: usize = 1024 * 1024;
 #[cfg(unix)]
 const MAX_ERROR_BYTES: usize = 16 * 1024;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+const MAX_TOTAL_NAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(unix)]
 #[derive(Debug)]
 pub(crate) enum Request {
     Trash(Vec<PathBuf>),
     Restore(PathBuf),
+    #[cfg(target_os = "macos")]
+    RemoveRestoreOrigins(Vec<String>),
 }
 
 #[cfg(unix)]
@@ -41,6 +45,8 @@ pub(crate) fn validate_request(request: &Request) -> io::Result<()> {
             }
         }
         Request::Restore(path) => validate_path(path)?,
+        #[cfg(target_os = "macos")]
+        Request::RemoveRestoreOrigins(names) => validate_restore_origin_names(names)?,
     }
     Ok(())
 }
@@ -60,6 +66,14 @@ pub(crate) fn write_request(mut writer: impl Write, request: &Request) -> io::Re
         Request::Restore(path) => {
             writer.write_all(&[2])?;
             write_path(&mut writer, path)?;
+        }
+        #[cfg(target_os = "macos")]
+        Request::RemoveRestoreOrigins(names) => {
+            writer.write_all(&[3])?;
+            write_u32(&mut writer, names.len())?;
+            for name in names {
+                write_bytes(&mut writer, name.as_bytes())?;
+            }
         }
     }
     Ok(())
@@ -90,6 +104,31 @@ pub(crate) fn read_request(mut reader: impl Read) -> io::Result<Request> {
             Ok(Request::Trash(paths))
         }
         2 => Ok(Request::Restore(read_path(&mut reader)?)),
+        #[cfg(target_os = "macos")]
+        3 => {
+            let count = read_u32(&mut reader)?;
+            if count > MAX_ITEMS {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "too many names"));
+            }
+            let mut names = Vec::with_capacity(count);
+            let mut total_bytes = 0usize;
+            for _ in 0..count {
+                let bytes = read_bytes(&mut reader)?;
+                total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "names are too large")
+                })?;
+                if total_bytes > MAX_TOTAL_NAME_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "names are too large",
+                    ));
+                }
+                let name = String::from_utf8(bytes)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "name is not UTF-8"))?;
+                names.push(name);
+            }
+            Ok(Request::RemoveRestoreOrigins(names))
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "unknown request",
@@ -151,6 +190,34 @@ fn validate_path(path: &std::path::Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn validate_restore_origin_names(names: &[String]) -> io::Result<()> {
+    if names.len() > MAX_ITEMS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "too many names",
+        ));
+    }
+    let total_bytes = names.iter().try_fold(0usize, |total, name| {
+        if name.len() > MAX_PATH_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "name too large",
+            ));
+        }
+        total
+            .checked_add(name.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "names are too large"))
+    })?;
+    if total_bytes > MAX_TOTAL_NAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "names are too large",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn read_path(reader: impl Read) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_vec(read_bytes(reader)?)))
@@ -202,19 +269,62 @@ pub fn run() -> anyhow::Result<()> {
     let request = read_request(io::stdin().lock())?;
     let response = match request {
         Request::Trash(paths) => crate::app::run_user_trash_helper(&paths),
-        Request::Restore(path) => match crate::fs::restore_trash_item(&path) {
-            Ok(()) => Response {
-                completed: 1,
-                error: None,
-            },
-            Err(error) => Response {
-                completed: 0,
-                error: Some(error.to_string()),
-            },
-        },
+        Request::Restore(path) => restore_response(&path),
+        #[cfg(target_os = "macos")]
+        Request::RemoveRestoreOrigins(names) => {
+            let names_ref = names.iter().map(String::as_str).collect::<Vec<_>>();
+            match crate::fs::remove_restore_origins_checked(&names_ref) {
+                Ok(()) => Response {
+                    completed: names.len(),
+                    error: None,
+                },
+                Err(error) => Response {
+                    completed: 0,
+                    error: Some(error.to_string()),
+                },
+            }
+        }
     };
     write_response(io::stdout().lock(), &response)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn restore_response(path: &std::path::Path) -> Response {
+    #[cfg(target_os = "macos")]
+    {
+        return checked_restore_response(crate::fs::restore_trash_item_checked_metadata(path));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    match crate::fs::restore_trash_item(path) {
+        Ok(()) => Response {
+            completed: 1,
+            error: None,
+        },
+        Err(error) => Response {
+            completed: 0,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn checked_restore_response(result: anyhow::Result<Option<anyhow::Error>>) -> Response {
+    match result {
+        Ok(None) => Response {
+            completed: 1,
+            error: None,
+        },
+        Ok(Some(error)) => Response {
+            completed: 1,
+            error: Some(format!("could not update Trash restore metadata: {error}")),
+        },
+        Err(error) => Response {
+            completed: 0,
+            error: Some(error.to_string()),
+        },
+    }
 }
 
 #[cfg(unix)]
@@ -340,5 +450,54 @@ mod tests {
         let decoded = read_response(bytes.as_slice()).unwrap();
         assert_eq!(decoded.completed, 7);
         assert_eq!(decoded.error.unwrap().len(), MAX_ERROR_BYTES);
+    }
+
+    #[test]
+    fn restore_origin_names_are_bounded() {
+        assert!(validate_restore_origin_names(&["report.pdf".to_string()]).is_ok());
+        assert_eq!(
+            validate_restore_origin_names(&vec!["name".to_string(); MAX_ITEMS + 1])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            validate_restore_origin_names(&["x".repeat(MAX_PATH_BYTES + 1)])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn checked_restore_distinguishes_metadata_warning_from_restore_failure() {
+        let warning = checked_restore_response(Ok(Some(anyhow::anyhow!("store is read-only"))));
+        assert_eq!(warning.completed, 1);
+        assert_eq!(
+            warning.error.as_deref(),
+            Some("could not update Trash restore metadata: store is read-only")
+        );
+
+        let failure = checked_restore_response(Err(anyhow::anyhow!("permission denied")));
+        assert_eq!(failure.completed, 0);
+        assert_eq!(failure.error.as_deref(), Some("permission denied"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn remove_restore_origins_round_trips_names() {
+        let request = Request::RemoveRestoreOrigins(vec![
+            "report.pdf".to_string(),
+            "report 2.pdf".to_string(),
+        ]);
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request).unwrap();
+        let Request::RemoveRestoreOrigins(names) = read_request(bytes.as_slice()).unwrap() else {
+            panic!("wrong request type");
+        };
+        assert_eq!(
+            names,
+            vec!["report.pdf".to_string(), "report 2.pdf".to_string()]
+        );
     }
 }

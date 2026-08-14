@@ -232,12 +232,15 @@ fn run_permanent_delete(
     let mut errors: Vec<String> = Vec::new();
     let mut stopped_early = false;
     let mut last_progress_at: Option<Instant> = None;
-    // Collect names of items successfully removed from trash so their restore
-    // origins can be pruned after the loop.  Staged directories are included
-    // here even if their background cleanup later fails: the item is already
-    // gone from the trash regardless of whether the staging area is reclaimed.
     #[cfg(target_os = "macos")]
-    let mut deleted_names: Vec<&str> = Vec::new();
+    let restore_origins_trash_dir = macos_restore_origins_trash_dir();
+    // Collect names of top-level items successfully removed from the selected
+    // user's Trash so their restore origins can be pruned after the loop.
+    // Staged directories are included even if their background cleanup later
+    // fails: the item is already gone from Trash regardless of whether staging
+    // is reclaimed.
+    #[cfg(target_os = "macos")]
+    let mut deleted_names: Vec<String> = Vec::new();
 
     for target in &request.targets {
         if cancelled.load(Ordering::Relaxed)
@@ -247,7 +250,7 @@ fn run_permanent_delete(
             break;
         }
 
-        if target.is_dir {
+        let removed_from_original_location = if target.is_dir {
             // Try rename-to-staging first.  If staging is unavailable or the
             // rename fails (wrong filesystem, permissions), fall back to an
             // in-place remove_dir_all.
@@ -257,30 +260,33 @@ fn run_permanent_delete(
             {
                 Some(staged_path) => {
                     staged.push((target.name.clone(), staged_path));
-                    completed += 1;
-                    #[cfg(target_os = "macos")]
-                    deleted_names.push(target.name.as_str());
+                    true
                 }
                 None => match fs::remove_dir_all(&target.path) {
-                    Ok(()) => {
-                        completed += 1;
-                        #[cfg(target_os = "macos")]
-                        deleted_names.push(target.name.as_str());
-                    }
+                    Ok(()) => true,
                     Err(e) => {
                         errors.push(format!("Could not delete \"{}\": {e}", target.name));
+                        false
                     }
                 },
             }
         } else {
             match fs::remove_file(&target.path) {
-                Ok(()) => {
-                    completed += 1;
-                    #[cfg(target_os = "macos")]
-                    deleted_names.push(target.name.as_str());
+                Ok(()) => true,
+                Err(e) => {
+                    errors.push(format!("Could not delete \"{}\": {e}", target.name));
+                    false
                 }
-                Err(e) => errors.push(format!("Could not delete \"{}\": {e}", target.name)),
             }
+        };
+        if removed_from_original_location {
+            completed += 1;
+            #[cfg(target_os = "macos")]
+            collect_deleted_restore_origin(
+                &target.path,
+                restore_origins_trash_dir.as_deref(),
+                &mut deleted_names,
+            );
         }
 
         if !send_trash_progress(result_tx, request.token, completed, &mut last_progress_at) {
@@ -299,11 +305,59 @@ fn run_permanent_delete(
     }
 
     #[cfg(target_os = "macos")]
-    if !deleted_names.is_empty() {
-        crate::fs::remove_restore_origins(&deleted_names);
+    if let Err(error) = remove_deleted_restore_origins(&deleted_names) {
+        errors.push(format!("Could not update Trash restore metadata: {error}"));
     }
 
     (completed, errors, stopped_early)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_restore_origins_trash_dir() -> Option<PathBuf> {
+    crate::config::trash_home_dir().map(|home| home.join(".Trash"))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn collect_deleted_restore_origin(
+    path: &Path,
+    trash_dir: Option<&Path>,
+    deleted_names: &mut Vec<String>,
+) {
+    if trash_dir.is_some_and(|trash_dir| path.parent() == Some(trash_dir))
+        && let Some(name) = path.file_name().and_then(|name| name.to_str())
+    {
+        deleted_names.push(name.to_owned());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_deleted_restore_origins(names: &[String]) -> Result<(), String> {
+    use crate::{config::InvocationContext, user_fs_helper::Request};
+
+    if names.is_empty() {
+        return Ok(());
+    }
+    match crate::config::invoking_user_context() {
+        InvocationContext::Normal | InvocationContext::RootSession => {
+            let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+            crate::fs::remove_restore_origins(&refs);
+            Ok(())
+        }
+        InvocationContext::Elevated(user) => {
+            let response = super::super::invoking_user_fs::run(
+                user,
+                &Request::RemoveRestoreOrigins(names.to_vec()),
+            )?;
+            if let Some(error) = response.error {
+                return Err(error);
+            }
+            if response.completed != names.len() {
+                return Err("helper did not remove all restore origins".to_string());
+            }
+            Ok(())
+        }
+        InvocationContext::ElevatedUnresolved => Err("could not resolve invoking user".to_string()),
+    }
 }
 
 /// Returns the path used as a staging area for rename-first directory deletion.
@@ -508,24 +562,13 @@ fn run_trash_batch(
     let paths: Vec<_> = request.targets.iter().map(|t| t.path.as_path()).collect();
     let total = paths.len();
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     if let Some(result) = trash_as_invoking_user(&paths) {
         return result;
     }
 
     match trash_with_system_backend(&paths) {
-        TrashBatchBackendResult::Completed => {
-            #[cfg(target_os = "macos")]
-            {
-                let origins: Vec<(String, std::path::PathBuf)> = request
-                    .targets
-                    .iter()
-                    .map(|t| (t.name.clone(), t.path.clone()))
-                    .collect();
-                crate::fs::save_restore_origins(&origins);
-            }
-            (total, Vec::new(), false)
-        }
+        TrashBatchBackendResult::Completed => (total, Vec::new(), false),
         TrashBatchBackendResult::Failed { completed, error } => (completed, vec![error], false),
     }
 }
@@ -536,7 +579,7 @@ enum TrashBatchBackendResult {
     Failed { completed: usize, error: String },
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)> {
     use crate::{
         config::{InvocationContext, invoking_user_context},
@@ -582,18 +625,30 @@ pub(crate) fn run_user_trash_helper(paths: &[PathBuf]) -> crate::user_fs_helper:
 
 fn trash_with_system_backend(paths: &[&Path]) -> TrashBatchBackendResult {
     #[cfg(target_os = "linux")]
-    {
-        trash_with_gio_first(paths)
-    }
+    let result = trash_with_gio_first(paths);
 
     #[cfg(not(target_os = "linux"))]
-    match trash_with_crate(paths) {
+    let result = match trash_with_crate(paths) {
         Ok(()) => TrashBatchBackendResult::Completed,
         Err(error) => TrashBatchBackendResult::Failed {
             completed: 0,
             error,
         },
+    };
+
+    #[cfg(target_os = "macos")]
+    if result == TrashBatchBackendResult::Completed {
+        let origins = paths
+            .iter()
+            .filter_map(|path| {
+                let name = path.file_name()?.to_str()?.to_owned();
+                Some((name, path.to_path_buf()))
+            })
+            .collect::<Vec<_>>();
+        crate::fs::save_restore_origins(&origins);
     }
+
+    result
 }
 
 fn trash_with_crate(paths: &[&Path]) -> Result<(), String> {

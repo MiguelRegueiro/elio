@@ -1,5 +1,5 @@
 mod config;
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 mod invoking_user_fs;
 mod metrics;
 mod pool;

@@ -46,7 +46,7 @@ impl RestorePool {
         let worker = thread::spawn(move || {
             while let Some(request) = RestoreShared::pop(&shared_worker) {
                 RestoreShared::set_active(&shared_worker, true);
-                let (completed, errors, stopped_early) = run_restore(
+                let (completed, errors, warnings, stopped_early) = run_restore(
                     &request,
                     &result_tx,
                     &shared_worker.cancelled,
@@ -56,7 +56,7 @@ impl RestorePool {
 
                 let total = request.targets.len();
                 let single_name = (total == 1).then(|| request.targets[0].name.as_str());
-                let status = if stopped_early {
+                let mut status = if stopped_early {
                     match completed {
                         0 => "Restore cancelled".to_string(),
                         1 => "Restore cancelled — Restored 1 item".to_string(),
@@ -81,6 +81,14 @@ impl RestorePool {
                         errors[0]
                     )
                 };
+                if !warnings.is_empty() {
+                    let warning = if warnings.len() == 1 {
+                        format!("warning: {}", warnings[0])
+                    } else {
+                        format!("{} warnings — first: {}", warnings.len(), warnings[0])
+                    };
+                    status = format!("{status}; {warning}");
+                }
 
                 if result_tx
                     .send(JobResult::Restore(RestoreBuild {
@@ -165,13 +173,12 @@ fn run_restore(
     result_tx: &mpsc::Sender<JobResult>,
     cancelled: &AtomicBool,
     cancel_token: &AtomicU64,
-) -> (usize, Vec<String>, bool) {
+) -> (usize, Vec<String>, Vec<String>, bool) {
     let mut completed = 0usize;
     let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut stopped_early = false;
     let mut last_progress_at: Option<Instant> = None;
-    #[cfg(target_os = "macos")]
-    let mut restored_names: Vec<&str> = Vec::new();
 
     for target in &request.targets {
         if cancelled.load(Ordering::Relaxed)
@@ -183,10 +190,11 @@ fn run_restore(
 
         let restore_result = restore_as_invoking_user(&target.path);
         match restore_result {
-            Ok(_) => {
+            Ok(metadata_warning) => {
                 completed += 1;
-                #[cfg(target_os = "macos")]
-                restored_names.push(target.name.as_str());
+                if let Some(warning) = metadata_warning {
+                    warnings.push(format!("Restored \"{}\", but {warning}", target.name));
+                }
             }
             Err(e) => {
                 errors.push(format!("Could not restore \"{}\": {e}", target.name));
@@ -198,16 +206,11 @@ fn run_restore(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    if !restored_names.is_empty() {
-        crate::fs::remove_restore_origins(&restored_names);
-    }
-
-    (completed, errors, stopped_early)
+    (completed, errors, warnings, stopped_early)
 }
 
-fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<()> {
-    #[cfg(all(unix, not(target_os = "macos")))]
+fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<Option<String>> {
+    #[cfg(unix)]
     {
         use crate::{
             config::{InvocationContext, invoking_user_context},
@@ -224,15 +227,23 @@ fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<()> {
                     &Request::Restore(path.to_path_buf()),
                 )
                 .map_err(anyhow::Error::msg)?;
-                if let Some(error) = response.error {
-                    anyhow::bail!(error);
-                }
-                anyhow::ensure!(response.completed == 1, "helper did not restore the item");
-                return Ok(());
+                return restore_helper_response(response);
             }
         }
     }
-    crate::fs::restore_trash_item(path)
+    crate::fs::restore_trash_item(path).map(|()| None)
+}
+
+#[cfg(unix)]
+fn restore_helper_response(
+    response: crate::user_fs_helper::Response,
+) -> anyhow::Result<Option<String>> {
+    match (response.completed, response.error) {
+        (1, warning) => Ok(warning),
+        (0, Some(error)) => anyhow::bail!(error),
+        (0, None) => anyhow::bail!("helper did not restore the item"),
+        _ => anyhow::bail!("invalid invoking-user restore response"),
+    }
 }
 
 /// Send a throttled intermediate progress result.  Returns `false` if the
@@ -257,4 +268,34 @@ fn send_restore_progress(
             .is_ok();
     }
     true
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_helper_restore_preserves_metadata_warning() {
+        let warning = restore_helper_response(crate::user_fs_helper::Response {
+            completed: 1,
+            error: Some("could not update Trash restore metadata".to_string()),
+        })
+        .unwrap();
+
+        assert_eq!(
+            warning.as_deref(),
+            Some("could not update Trash restore metadata")
+        );
+    }
+
+    #[test]
+    fn failed_helper_restore_remains_an_error() {
+        let error = restore_helper_response(crate::user_fs_helper::Response {
+            completed: 0,
+            error: Some("permission denied".to_string()),
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "permission denied");
+    }
 }

@@ -138,13 +138,13 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
 }
 
 pub(crate) fn trash_home_dir() -> Option<std::path::PathBuf> {
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     return trash_home_for_context(context());
-    #[cfg(any(not(unix), target_os = "macos"))]
+    #[cfg(not(unix))]
     return dirs::home_dir();
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 fn trash_home_for_context(context: &InvocationContext) -> Option<PathBuf> {
     match context {
         InvocationContext::Normal | InvocationContext::RootSession => dirs::home_dir(),
@@ -899,12 +899,19 @@ mod tests {
         assert_eq!(parse_linux_process_identity(b"Name:\ttest\n"), None);
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn unresolved_elevated_context_has_no_trash_home() {
         assert_eq!(
             trash_home_for_context(&InvocationContext::ElevatedUnresolved),
             None
+        );
+    }
+
+    #[test]
+    fn elevated_context_uses_invoking_user_trash_home() {
+        assert_eq!(
+            trash_home_for_context(&InvocationContext::Elevated(test_user())),
+            Some(PathBuf::from("/home/paco"))
         );
     }
 

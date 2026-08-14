@@ -53,7 +53,10 @@ pub(crate) use opener::{detached_open_command, open_in_system};
 pub(crate) use places::{build_sidebar_rows, trash_dir};
 pub(crate) use restore::restore_trash_item;
 #[cfg(target_os = "macos")]
-pub(crate) use restore::{remove_restore_origins, save_restore_origins};
+pub(crate) use restore::{
+    remove_restore_origins, remove_restore_origins_checked, restore_trash_item_checked_metadata,
+    save_restore_origins,
+};
 pub(crate) use sort::natural_cmp;
 pub(crate) use watch::{
     DirectoryWatchEvent, DirectoryWatcher, directory_watch_debounce, event_affects_visible_entries,

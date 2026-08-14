@@ -17,43 +17,58 @@ use std::{
 ///   sibling `Trash/info/<name>.trashinfo` file must exist.  The original path
 ///   is read from that file and the item is moved back.
 ///
-/// - **macOS `~/.Trash`**: Finder records the original location internally
-///   when an item is trashed.  The `osascript` "put back" command asks Finder
-///   to use that metadata and move the item back — exactly what the Finder
-///   "Put Back" menu item does.
+/// - **macOS `~/.Trash`**: Elio reads the original location from its own
+///   restore-origins store, falling back to Finder's `.DS_Store` metadata,
+///   then moves the item back directly.
 ///
 /// The FreeDesktop path is tried first (it works even on macOS if the XDG
 /// layout happens to be present), then the macOS path, then an unsupported
 /// error for any other layout (e.g. Windows Recycle Bin).
 pub(crate) fn restore_trash_item(entry_path: &Path) -> anyhow::Result<()> {
-    // FreeDesktop trash layout: the entry lives inside a `files/` directory,
-    // and a sibling `info/` directory holds the `.trashinfo` metadata.
-    //
-    // Both conditions are required.  Checking only for `info/` two levels up
-    // is insufficient: on macOS, `~/.Trash/foo` would compute `~/info`, and
-    // if the user happens to have a `~/info` directory for any reason the
-    // function would take the FreeDesktop path and fail to find a `.trashinfo`
-    // instead of correctly falling through to the Finder backend.
-    let parent = entry_path.parent();
-    let in_files_dir = parent
-        .and_then(|p| p.file_name())
-        .is_some_and(|name| name == "files");
-    let info_dir = parent
-        .and_then(|p| p.parent())
-        .map(|trash_root| trash_root.join("info"));
-
-    if in_files_dir && info_dir.as_deref().is_some_and(|d| d.is_dir()) {
-        return restore_trash_item_freedesktop(entry_path, info_dir.unwrap());
+    if let Some(info_dir) = freedesktop_info_dir(entry_path) {
+        return restore_trash_item_freedesktop(entry_path, info_dir);
     }
 
-    // macOS: no .trashinfo metadata, but Finder tracks the original location
-    // internally.  Ask it to "put back" the item via osascript.
+    // macOS: no .trashinfo metadata; use Elio's restore-origins store or
+    // Finder's .DS_Store metadata.
     #[cfg(target_os = "macos")]
-    return restore_trash_item_macos(entry_path);
+    {
+        let file_name = restore_trash_item_macos(entry_path)?;
+        remove_restore_origins(&[&file_name]);
+        return Ok(());
+    }
 
     // Any other layout (e.g. Windows Recycle Bin) is not supported.
     #[cfg(not(target_os = "macos"))]
     anyhow::bail!("restore is not supported for this trash location")
+}
+
+/// Returns the FreeDesktop `info/` directory when `entry_path` is inside the
+/// sibling `files/` directory of a valid Trash layout.
+fn freedesktop_info_dir(entry_path: &Path) -> Option<PathBuf> {
+    // Requiring the immediate parent to be named `files` prevents a macOS
+    // ~/.Trash item from being misdetected merely because ~/info exists.
+    let parent = entry_path.parent()?;
+    if parent.file_name()? != "files" {
+        return None;
+    }
+    let info_dir = parent.parent()?.join("info");
+    info_dir.is_dir().then_some(info_dir)
+}
+
+/// Restores as usual but checks macOS restore-origin cleanup. A returned error
+/// means the filesystem restore completed and only metadata cleanup failed.
+#[cfg(target_os = "macos")]
+pub(crate) fn restore_trash_item_checked_metadata(
+    entry_path: &Path,
+) -> anyhow::Result<Option<anyhow::Error>> {
+    if let Some(info_dir) = freedesktop_info_dir(entry_path) {
+        restore_trash_item_freedesktop(entry_path, info_dir)?;
+        return Ok(None);
+    }
+
+    let file_name = restore_trash_item_macos(entry_path)?;
+    Ok(remove_restore_origins_checked(&[&file_name]).err())
 }
 
 /// FreeDesktop-specific restore: reads the `.trashinfo` sidecar and moves the
@@ -93,12 +108,9 @@ fn restore_trash_item_freedesktop(entry_path: &Path, info_dir: PathBuf) -> anyho
 // ---------------------------------------------------------------------------
 // macOS restore-origins store
 // ---------------------------------------------------------------------------
-// Elio trashes files via the `trash` crate, which calls
-// NSWorkspace.recycleURLs.  That API stores the original path in a private
-// system database that Finder reads for "Put Back" — it does NOT reliably
-// write ptbL/ptbN records to ~/.Trash/.DS_Store the way Finder's own drag-
-// to-trash action does.  Parsing .DS_Store therefore fails for any file Elio
-// trashed, even though Finder's own "Put Back" works fine for those files.
+// trash 5.2.6 defaults to asking Finder to move files to Trash through
+// `osascript`. Finder's Put Back metadata is private and `.DS_Store` ptbL/ptbN
+// records are not reliable enough for Elio's direct restore implementation.
 //
 // To work around this, whenever Elio trashes a file it immediately records
 // the original path in its own JSON store at
@@ -148,28 +160,43 @@ pub(crate) fn save_restore_origins(items: &[(String, PathBuf)]) {
 /// Best-effort: silently ignores any I/O error.
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_restore_origins(trash_names: &[&str]) {
+    let _ = remove_restore_origins_checked(trash_names);
+}
+
+/// Checked variant used by the invoking-user helper. Missing metadata and
+/// names with no matching entry are successful no-ops; malformed metadata and
+/// real I/O failures are returned to the privileged parent.
+#[cfg(target_os = "macos")]
+pub(crate) fn remove_restore_origins_checked(trash_names: &[&str]) -> anyhow::Result<()> {
     let Some(path) = restore_origins_path() else {
-        return;
+        anyhow::bail!("cannot determine restore-origins path");
     };
-    let bytes = match fs::read(&path) {
+    remove_restore_origins_at_path_checked(&path, trash_names)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn remove_restore_origins_at_path_checked(path: &Path, trash_names: &[&str]) -> anyhow::Result<()> {
+    let bytes = match fs::read(path) {
         Ok(b) => b,
-        Err(_) => return,
-    };
-    let mut map: std::collections::HashMap<String, String> = match serde_json::from_slice(&bytes) {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-    if remove_from_origins_map(&mut map, trash_names) {
-        if let Ok(json) = serde_json::to_vec_pretty(&map) {
-            let _ = fs::write(&path, json);
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot read {:?}", path));
         }
+    };
+    let mut map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&bytes).with_context(|| format!("cannot parse {:?}", path))?;
+    if remove_from_origins_map(&mut map, trash_names) {
+        let json = serde_json::to_vec_pretty(&map)
+            .with_context(|| format!("cannot serialize {:?}", path))?;
+        fs::write(path, json).with_context(|| format!("cannot write {:?}", path))?;
     }
+    Ok(())
 }
 
 /// Core map-mutation logic for [`remove_restore_origins`]: removes each name
 /// in `trash_names` from `map`, trying the exact key first then the
 /// collision-stripped base name.  Returns `true` if the map was modified.
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn remove_from_origins_map(
     map: &mut std::collections::HashMap<String, String>,
     trash_names: &[&str],
@@ -184,16 +211,16 @@ fn remove_from_origins_map(
         // "foo.txt") but appears in trash as "foo 2.txt".  Strip the suffix
         // and try again.
         let p = Path::new(name);
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            if let Some(base_stem) = strip_macos_collision_suffix(stem) {
-                let ext = p.extension().and_then(|e| e.to_str());
-                let base_name = match ext {
-                    Some(e) => format!("{base_stem}.{e}"),
-                    None => base_stem.to_owned(),
-                };
-                if map.remove(&base_name).is_some() {
-                    changed = true;
-                }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+            && let Some(base_stem) = strip_macos_collision_suffix(stem)
+        {
+            let ext = p.extension().and_then(|e| e.to_str());
+            let base_name = match ext {
+                Some(e) => format!("{base_stem}.{e}"),
+                None => base_stem.to_owned(),
+            };
+            if map.remove(&base_name).is_some() {
+                changed = true;
             }
         }
     }
@@ -227,7 +254,7 @@ fn load_restore_origin(trash_name: &str) -> Option<PathBuf> {
 
 /// Strips a macOS collision suffix (` 2`, ` 3`, …) from a file stem.
 /// Returns `Some(base)` if a suffix was stripped, `None` otherwise.
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn strip_macos_collision_suffix(stem: &str) -> Option<&str> {
     let (base, suffix) = stem.rsplit_once(' ')?;
     let n: u64 = suffix.parse().ok()?;
@@ -255,7 +282,7 @@ fn perform_restore(entry_path: &Path, original_path: &Path) -> anyhow::Result<()
 /// (populated whenever Elio trashes a file), then falls back to parsing
 /// `.DS_Store` for files trashed directly by Finder.
 #[cfg(target_os = "macos")]
-fn restore_trash_item_macos(entry_path: &Path) -> anyhow::Result<()> {
+fn restore_trash_item_macos(entry_path: &Path) -> anyhow::Result<String> {
     let file_name = entry_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -272,7 +299,8 @@ fn restore_trash_item_macos(entry_path: &Path) -> anyhow::Result<()> {
 
     // ── Primary: our own restore-origins store ──────────────────────────────
     if let Some(original_path) = load_restore_origin(file_name) {
-        return perform_restore(entry_path, &original_path);
+        perform_restore(entry_path, &original_path)?;
+        return Ok(file_name.to_owned());
     }
 
     // ── Fallback: parse .DS_Store written by Finder ─────────────────────────
@@ -303,7 +331,7 @@ fn restore_trash_item_macos(entry_path: &Path) -> anyhow::Result<()> {
 
     perform_restore(entry_path, &original_path)?;
 
-    Ok(())
+    Ok(file_name.to_owned())
 }
 
 // ---------------------------------------------------------------------------
