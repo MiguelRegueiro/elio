@@ -9,6 +9,7 @@ mod preview;
 mod runtime;
 mod shell;
 mod ui;
+mod user_fs_helper;
 mod zoxide;
 
 use anyhow::Result;
@@ -40,6 +41,11 @@ pub fn run_at(cwd: PathBuf) -> Result<()> {
 
 pub fn run_with_options(options: RunOptions) -> Result<()> {
     runtime::run_with_startup_state(options, None, false, None).map(|_| ())
+}
+
+#[doc(hidden)]
+pub fn run_user_fs_helper() -> Result<()> {
+    user_fs_helper::run()
 }
 
 #[doc(hidden)]

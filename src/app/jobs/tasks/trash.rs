@@ -508,6 +508,11 @@ fn run_trash_batch(
     let paths: Vec<_> = request.targets.iter().map(|t| t.path.as_path()).collect();
     let total = paths.len();
 
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(result) = trash_as_invoking_user(&paths) {
+        return result;
+    }
+
     match trash_with_system_backend(&paths) {
         TrashBatchBackendResult::Completed => {
             #[cfg(target_os = "macos")]
@@ -529,6 +534,50 @@ fn run_trash_batch(
 enum TrashBatchBackendResult {
     Completed,
     Failed { completed: usize, error: String },
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)> {
+    use crate::{
+        config::{InvocationContext, invoking_user_context},
+        user_fs_helper::Request,
+    };
+
+    match invoking_user_context() {
+        InvocationContext::Normal => None,
+        InvocationContext::ElevatedUnresolved => Some((
+            0,
+            vec!["Could not resolve invoking user; nothing was trashed".to_string()],
+            false,
+        )),
+        InvocationContext::Elevated(user) => {
+            let owned = paths.iter().map(|path| (*path).to_path_buf()).collect();
+            let response = super::super::invoking_user_fs::run(&user, &Request::Trash(owned));
+            Some(match response {
+                Ok(response) => (
+                    response.completed,
+                    response.error.into_iter().collect(),
+                    false,
+                ),
+                Err(error) => (0, vec![format!("Could not trash items: {error}")], false),
+            })
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn run_user_trash_helper(paths: &[PathBuf]) -> crate::user_fs_helper::Response {
+    let refs: Vec<_> = paths.iter().map(PathBuf::as_path).collect();
+    match trash_with_system_backend(&refs) {
+        TrashBatchBackendResult::Completed => crate::user_fs_helper::Response {
+            completed: paths.len(),
+            error: None,
+        },
+        TrashBatchBackendResult::Failed { completed, error } => crate::user_fs_helper::Response {
+            completed,
+            error: Some(error),
+        },
+    }
 }
 
 fn trash_with_system_backend(paths: &[&Path]) -> TrashBatchBackendResult {

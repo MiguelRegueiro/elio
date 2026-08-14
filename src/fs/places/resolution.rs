@@ -28,15 +28,6 @@ pub(super) struct PlaceResolutionContext {
     pub(super) trash: Option<PathBuf>,
 }
 
-/// Returns the current user's home directory.
-///
-/// Delegates to the [`dirs`] crate, which reads `$HOME` on Unix and
-/// `%USERPROFILE%` / `{FOLDERID_Profile}` on Windows. Returns `None` only in
-/// the unlikely event that none of the relevant system APIs succeed.
-pub(crate) fn home_dir() -> Option<PathBuf> {
-    dirs::home_dir()
-}
-
 pub(crate) fn build_sidebar_rows() -> Vec<SidebarRow> {
     let home = crate::config::invoking_user_home_dir().unwrap_or_else(|| {
         #[cfg(windows)]
@@ -116,7 +107,7 @@ fn system_place_resolution_context(
         } else {
             None
         },
-        trash: process_home.as_deref().and_then(trash_dir),
+        trash: crate::config::trash_home_dir().and_then(|home| trash_dir(&home)),
         home,
     }
 }
@@ -415,9 +406,16 @@ pub(super) fn normalize_absolute_path(path: &Path) -> PathBuf {
 /// - **Windows:** always returns `None`. The Recycle Bin is a virtual shell folder
 ///   that is not practically accessible as a regular filesystem path.
 pub(crate) fn trash_dir(home: &Path) -> Option<PathBuf> {
-    // dirs::data_dir() honours $XDG_DATA_HOME on Linux/BSD, returns
-    // ~/Library/Application Support on macOS, and %APPDATA% on Windows.
-    if let Some(data_dir) = dirs::data_dir() {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let data_dir = if crate::config::trash_home_dir().as_deref() == Some(home) {
+        crate::config::trash_data_dir()
+    } else {
+        Some(home.join(".local/share"))
+    };
+    #[cfg(any(not(unix), target_os = "macos"))]
+    let data_dir = dirs::data_dir();
+
+    if let Some(data_dir) = data_dir {
         let xdg_trash = data_dir.join("Trash/files");
         if xdg_trash.exists() {
             return Some(xdg_trash);

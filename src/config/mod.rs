@@ -11,9 +11,17 @@ mod ui;
 
 use serde::Deserialize;
 
+#[cfg(unix)]
+pub(crate) use self::invoking_user::{
+    InvocationContext, InvokingUser, context as invoking_user_context,
+};
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) use self::invoking_user::trash_data_dir;
+
 pub(crate) use self::{
     goto::{BuiltinGoto, GotoConfig, GotoEntrySpec},
-    invoking_user::home_dir as invoking_user_home_dir,
+    invoking_user::{home_dir as invoking_user_home_dir, trash_home_dir},
     keys::{Action, ChooserKeyAction, KeyBindings, KeyContext, KeyList, normalized_plain_key_char},
     layout::{LayoutConfig, PaneWeights},
     loading::config_dir,

@@ -32,6 +32,7 @@ pub(crate) fn run() -> Result<ExitCode> {
             print_help();
             Ok(ExitCode::SUCCESS)
         }
+        Command::UserFsHelper => elio::run_user_fs_helper().map(|()| ExitCode::SUCCESS),
         Command::PrintShellInit(shell) => {
             let executable = env::current_exe()?;
             let invocation = env::args().next();
@@ -113,6 +114,7 @@ enum Command {
     PrintShellInit(Shell),
     InstallShellIntegration(Option<Shell>),
     UninstallShellIntegration(Option<Shell>),
+    UserFsHelper,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
@@ -128,6 +130,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
     }
 
     match args.as_slice() {
+        [arg] if arg == "--internal-user-fs-helper" => return Ok(Command::UserFsHelper),
         [arg] if arg == "--version" || arg == "-V" => return Ok(Command::PrintVersion),
         [arg] if arg == "--help" || arg == "-h" => return Ok(Command::PrintHelp),
         [arg, unexpected, ..] if arg == "--version" || arg == "-V" => {

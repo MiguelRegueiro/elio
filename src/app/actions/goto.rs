@@ -249,7 +249,7 @@ fn trash_destination(app: &App) -> Option<PathBuf> {
         .filter_map(|row| row.item())
         .find(|item| item.kind == SidebarItemKind::Trash)
         .map(|item| item.path.clone())
-        .or_else(|| crate::fs::home_dir().and_then(|home| trash_dir(&home)))
+        .or_else(|| crate::config::trash_home_dir().and_then(|home| trash_dir(&home)))
 }
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
 mod config;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod invoking_user_fs;
 mod metrics;
 mod pool;
 mod results;
@@ -11,6 +13,8 @@ mod types;
 pub(super) use self::metrics::SchedulerMetricsSnapshot;
 pub(super) use self::scheduler::JobScheduler;
 use self::sync::{lock_unpoison, wait_unpoison};
+#[cfg(unix)]
+pub(crate) use self::tasks::trash::run_user_trash_helper;
 pub(super) use self::types::{
     ArchiveCreateBuild, ArchiveCreateRequest, ArchiveExtractBatchState, ArchiveExtractBuild,
     ArchiveExtractRequest, ArchivePasswordPrompt, DirectoryBuild, DirectoryFingerprintBuild,

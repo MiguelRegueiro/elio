@@ -5,4 +5,4 @@ mod resolution;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::resolution::{build_sidebar_rows, home_dir, trash_dir};
+pub(crate) use self::resolution::{build_sidebar_rows, trash_dir};
