@@ -1,8 +1,11 @@
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+#[cfg(not(unix))]
+use std::env;
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -34,7 +37,11 @@ pub(crate) fn preflight(cwd: &Path) -> Option<QueryResult> {
 }
 
 pub(crate) fn run_query_in_terminal(cwd: &Path) -> QueryResult {
-    let output = match Command::new("zoxide")
+    let mut command = match zoxide_command() {
+        Ok(command) => command,
+        Err(_) => return QueryResult::LaunchFailed,
+    };
+    let output = match command
         .args(["query", "-i", "--exclude"])
         .arg(cwd)
         .env("SHELL", "sh")
@@ -63,7 +70,7 @@ pub(crate) fn run_query_in_terminal(cwd: &Path) -> QueryResult {
 }
 
 fn has_match_excluding(cwd: &Path) -> io::Result<bool> {
-    let output = Command::new("zoxide")
+    let output = zoxide_command()?
         .args(["query", "-l", "--exclude"])
         .arg(cwd)
         .output()?;
@@ -71,8 +78,22 @@ fn has_match_excluding(cwd: &Path) -> io::Result<bool> {
 }
 
 fn has_any_match() -> io::Result<bool> {
-    let output = Command::new("zoxide").args(["query", "-l"]).output()?;
+    let output = zoxide_command()?.args(["query", "-l"]).output()?;
     Ok(!output.stdout.is_empty())
+}
+
+fn zoxide_command() -> io::Result<Command> {
+    let command = Command::new("zoxide");
+    #[cfg(unix)]
+    {
+        let mut command = command;
+        crate::invoking_user_command::prepare_external(&mut command, None)?;
+        Ok(command)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(command)
+    }
 }
 
 fn stderr_mentions_missing_fzf(stderr: &[u8]) -> bool {
@@ -87,13 +108,29 @@ fn stderr_mentions_missing_fzf(stderr: &[u8]) -> bool {
 }
 
 fn fzf_options() -> String {
+    fzf_options_with(invoking_user_environment_string)
+}
+
+fn invoking_user_environment_string(name: &str) -> Option<String> {
+    #[cfg(unix)]
+    let value = crate::config::invoking_user_env_var(name);
+    #[cfg(not(unix))]
+    let value = env::var_os(name);
+
+    value.and_then(|value| value.into_string().ok())
+}
+
+fn fzf_options_with(mut environment_value: impl FnMut(&str) -> Option<String>) -> String {
     let defaults = fzf_default_options().join(" ");
 
-    match (env::var("FZF_DEFAULT_OPTS"), env::var("ELIO_ZOXIDE_OPTS")) {
-        (Ok(base), Ok(extra)) => format!("{base} {defaults} {extra}"),
-        (Ok(base), Err(_)) => format!("{base} {defaults}"),
-        (Err(_), Ok(extra)) => format!("{defaults} {extra}"),
-        (Err(_), Err(_)) => defaults,
+    match (
+        environment_value("FZF_DEFAULT_OPTS"),
+        environment_value("ELIO_ZOXIDE_OPTS"),
+    ) {
+        (Some(base), Some(extra)) => format!("{base} {defaults} {extra}"),
+        (Some(base), None) => format!("{base} {defaults}"),
+        (None, Some(extra)) => format!("{defaults} {extra}"),
+        (None, None) => defaults,
     }
 }
 
@@ -156,7 +193,20 @@ fn path_from_command_stdout(mut stdout: Vec<u8>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod fzf_tests {
-    use super::fzf_default_options;
+    use super::{fzf_default_options, fzf_options_with};
+
+    #[test]
+    fn fzf_options_use_invoking_user_values() {
+        let options = fzf_options_with(|name| match name {
+            "FZF_DEFAULT_OPTS" => Some("--height=40%".to_string()),
+            "ELIO_ZOXIDE_OPTS" => Some("--no-mouse".to_string()),
+            _ => None,
+        });
+
+        assert!(options.starts_with("--height=40% "));
+        assert!(options.ends_with(" --no-mouse"));
+        assert!(options.contains("--exact"));
+    }
 
     #[test]
     fn fzf_options_include_base_picker_flags() {
