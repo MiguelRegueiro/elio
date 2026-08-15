@@ -28,6 +28,7 @@ pub(crate) enum Request {
 pub(crate) struct Response {
     pub(crate) completed: usize,
     pub(crate) error: Option<String>,
+    pub(crate) warning: Option<String>,
 }
 
 #[cfg(unix)]
@@ -138,14 +139,26 @@ pub(crate) fn read_request(mut reader: impl Read) -> io::Result<Request> {
 
 #[cfg(unix)]
 pub(crate) fn write_response(mut writer: impl Write, response: &Response) -> io::Result<()> {
+    if response.error.is_some() && response.warning.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "response cannot contain both an error and a warning",
+        ));
+    }
     writer.write_all(&(response.completed as u64).to_le_bytes())?;
-    match &response.error {
-        Some(error) => {
+    match (&response.error, &response.warning) {
+        (Some(_), Some(_)) => unreachable!("response fields were validated"),
+        (Some(error), None) => {
             writer.write_all(&[1])?;
             let bytes = error.as_bytes();
             write_bytes(&mut writer, &bytes[..bytes.len().min(MAX_ERROR_BYTES)])?;
         }
-        None => writer.write_all(&[0])?,
+        (None, Some(warning)) => {
+            writer.write_all(&[2])?;
+            let bytes = warning.as_bytes();
+            write_bytes(&mut writer, &bytes[..bytes.len().min(MAX_ERROR_BYTES)])?;
+        }
+        (None, None) => writer.write_all(&[0])?,
     }
     Ok(())
 }
@@ -154,11 +167,18 @@ pub(crate) fn write_response(mut writer: impl Write, response: &Response) -> io:
 pub(crate) fn read_response(mut reader: impl Read) -> io::Result<Response> {
     let mut completed = [0; 8];
     reader.read_exact(&mut completed)?;
-    let mut failed = [0];
-    reader.read_exact(&mut failed)?;
-    let error = match failed[0] {
-        0 => None,
-        1 => Some(String::from_utf8_lossy(&read_bytes(&mut reader)?).into_owned()),
+    let mut message_kind = [0];
+    reader.read_exact(&mut message_kind)?;
+    let (error, warning) = match message_kind[0] {
+        0 => (None, None),
+        1 => (
+            Some(String::from_utf8_lossy(&read_bytes(&mut reader)?).into_owned()),
+            None,
+        ),
+        2 => (
+            None,
+            Some(String::from_utf8_lossy(&read_bytes(&mut reader)?).into_owned()),
+        ),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -169,6 +189,7 @@ pub(crate) fn read_response(mut reader: impl Read) -> io::Result<Response> {
     Ok(Response {
         completed: u64::from_le_bytes(completed) as usize,
         error,
+        warning,
     })
 }
 
@@ -277,10 +298,12 @@ pub fn run() -> anyhow::Result<()> {
                 Ok(()) => Response {
                     completed: names.len(),
                     error: None,
+                    warning: None,
                 },
                 Err(error) => Response {
                     completed: 0,
                     error: Some(error.to_string()),
+                    warning: None,
                 },
             }
         }
@@ -301,10 +324,12 @@ fn restore_response(path: &std::path::Path) -> Response {
         Ok(()) => Response {
             completed: 1,
             error: None,
+            warning: None,
         },
         Err(error) => Response {
             completed: 0,
             error: Some(error.to_string()),
+            warning: None,
         },
     }
 }
@@ -315,14 +340,17 @@ fn checked_restore_response(result: anyhow::Result<Option<anyhow::Error>>) -> Re
         Ok(None) => Response {
             completed: 1,
             error: None,
+            warning: None,
         },
         Ok(Some(error)) => Response {
             completed: 1,
-            error: Some(format!("could not update Trash restore metadata: {error}")),
+            error: None,
+            warning: Some(format!("could not update Trash restore metadata: {error}")),
         },
         Err(error) => Response {
             completed: 0,
             error: Some(error.to_string()),
+            warning: None,
         },
     }
 }
@@ -444,12 +472,50 @@ mod tests {
         let response = Response {
             completed: 7,
             error: Some("x".repeat(MAX_PATH_BYTES + 1)),
+            warning: None,
         };
         let mut bytes = Vec::new();
         write_response(&mut bytes, &response).unwrap();
         let decoded = read_response(bytes.as_slice()).unwrap();
         assert_eq!(decoded.completed, 7);
         assert_eq!(decoded.error.unwrap().len(), MAX_ERROR_BYTES);
+        assert!(decoded.warning.is_none());
+    }
+
+    #[test]
+    fn response_round_trips_warning_separately_from_error() {
+        let response = Response {
+            completed: 2,
+            error: None,
+            warning: Some("restore metadata is unavailable".to_string()),
+        };
+        let mut bytes = Vec::new();
+
+        write_response(&mut bytes, &response).unwrap();
+        let decoded = read_response(bytes.as_slice()).unwrap();
+
+        assert_eq!(decoded.completed, 2);
+        assert!(decoded.error.is_none());
+        assert_eq!(
+            decoded.warning.as_deref(),
+            Some("restore metadata is unavailable")
+        );
+    }
+
+    #[test]
+    fn response_rejects_error_and_warning_together_before_writing() {
+        let response = Response {
+            completed: 1,
+            error: Some("failure".to_string()),
+            warning: Some("warning".to_string()),
+        };
+        let mut bytes = Vec::new();
+
+        assert_eq!(
+            write_response(&mut bytes, &response).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(bytes.is_empty());
     }
 
     #[test]
@@ -474,13 +540,15 @@ mod tests {
         let warning = checked_restore_response(Ok(Some(anyhow::anyhow!("store is read-only"))));
         assert_eq!(warning.completed, 1);
         assert_eq!(
-            warning.error.as_deref(),
+            warning.warning.as_deref(),
             Some("could not update Trash restore metadata: store is read-only")
         );
+        assert!(warning.error.is_none());
 
         let failure = checked_restore_response(Err(anyhow::anyhow!("permission denied")));
         assert_eq!(failure.completed, 0);
         assert_eq!(failure.error.as_deref(), Some("permission denied"));
+        assert!(failure.warning.is_none());
     }
 
     #[cfg(target_os = "macos")]
@@ -488,7 +556,7 @@ mod tests {
     fn remove_restore_origins_round_trips_names() {
         let request = Request::RemoveRestoreOrigins(vec![
             "report.pdf".to_string(),
-            "report 2.pdf".to_string(),
+            "report 11.53.48.pdf".to_string(),
         ]);
         let mut bytes = Vec::new();
         write_request(&mut bytes, &request).unwrap();
@@ -497,7 +565,7 @@ mod tests {
         };
         assert_eq!(
             names,
-            vec!["report.pdf".to_string(), "report 2.pdf".to_string()]
+            vec!["report.pdf".to_string(), "report 11.53.48.pdf".to_string()]
         );
     }
 }

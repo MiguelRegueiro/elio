@@ -55,7 +55,7 @@ pub(crate) use restore::restore_trash_item;
 #[cfg(target_os = "macos")]
 pub(crate) use restore::{
     remove_restore_origins, remove_restore_origins_checked, restore_trash_item_checked_metadata,
-    save_restore_origins,
+    save_restore_origins_checked,
 };
 pub(crate) use sort::natural_cmp;
 pub(crate) use watch::{
