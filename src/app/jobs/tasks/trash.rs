@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(any(test, target_os = "macos"))]
+use std::{collections::HashMap, ffi::OsString};
+
 #[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
 
@@ -60,7 +63,7 @@ impl TrashPool {
         let worker = thread::spawn(move || {
             while let Some(request) = TrashShared::pop(&shared_worker) {
                 TrashShared::set_active(&shared_worker, true);
-                let (completed, errors, stopped_early) = run_trash(
+                let (completed, errors, warnings, stopped_early) = run_trash(
                     &request,
                     &result_tx,
                     &shared_worker.cancelled,
@@ -75,7 +78,7 @@ impl TrashPool {
                 };
                 let total = request.targets.len();
                 let single_name = (total == 1).then(|| request.targets[0].name.as_str());
-                let status = if stopped_early && errors.is_empty() {
+                let mut status = if stopped_early && errors.is_empty() {
                     match completed {
                         0 => "Trash cancelled".to_string(),
                         1 => format!("Trash cancelled — {verb} 1 item"),
@@ -110,6 +113,14 @@ impl TrashPool {
                         errors[0]
                     )
                 };
+                if !warnings.is_empty() {
+                    let warning = format_restore_metadata_warning(verb, completed, &warnings);
+                    status = if !stopped_early && errors.is_empty() && completed > 0 {
+                        warning
+                    } else {
+                        format!("{status}; {warning}")
+                    };
+                }
 
                 if result_tx
                     .send(JobResult::Trash(TrashBuild {
@@ -197,11 +208,32 @@ fn run_trash(
     result_tx: &mpsc::Sender<JobResult>,
     cancelled: &AtomicBool,
     cancel_token: &AtomicU64,
-) -> (usize, Vec<String>, bool) {
+) -> (usize, Vec<String>, Vec<String>, bool) {
     if request.permanent {
-        run_permanent_delete(request, result_tx, cancelled, cancel_token)
+        let (completed, errors, stopped_early) =
+            run_permanent_delete(request, result_tx, cancelled, cancel_token);
+        (completed, errors, Vec::new(), stopped_early)
     } else {
         run_trash_batch(request, cancelled, cancel_token)
+    }
+}
+
+fn format_restore_metadata_warning(verb: &str, completed: usize, warnings: &[String]) -> String {
+    let subject = match completed {
+        1 => format!("{verb} 1 item"),
+        n => format!("{verb} {n} items"),
+    };
+    if warnings.len() == 1 {
+        format!(
+            "{subject}; restore metadata could not be saved: {}",
+            warnings[0]
+        )
+    } else {
+        format!(
+            "{subject}; {} restore metadata warnings — first: {}",
+            warnings.len(),
+            warnings[0]
+        )
     }
 }
 
@@ -350,6 +382,9 @@ fn remove_deleted_restore_origins(names: &[String]) -> Result<(), String> {
             )?;
             if let Some(error) = response.error {
                 return Err(error);
+            }
+            if let Some(warning) = response.warning {
+                return Err(warning);
             }
             if response.completed != names.len() {
                 return Err("helper did not remove all restore origins".to_string());
@@ -554,9 +589,9 @@ fn run_trash_batch(
     request: &TrashRequest,
     cancelled: &AtomicBool,
     cancel_token: &AtomicU64,
-) -> (usize, Vec<String>, bool) {
+) -> (usize, Vec<String>, Vec<String>, bool) {
     if cancelled.load(Ordering::Relaxed) || cancel_token.load(Ordering::Relaxed) == request.token {
-        return (0, Vec::new(), true);
+        return (0, Vec::new(), Vec::new(), true);
     }
 
     let paths: Vec<_> = request.targets.iter().map(|t| t.path.as_path()).collect();
@@ -568,19 +603,33 @@ fn run_trash_batch(
     }
 
     match trash_with_system_backend(&paths) {
-        TrashBatchBackendResult::Completed => (total, Vec::new(), false),
-        TrashBatchBackendResult::Failed { completed, error } => (completed, vec![error], false),
+        TrashBatchBackendResult::Completed => (total, Vec::new(), Vec::new(), false),
+        #[cfg(any(test, target_os = "macos"))]
+        TrashBatchBackendResult::CompletedWithWarning { completed, warning } => {
+            (completed, Vec::new(), vec![warning], false)
+        }
+        TrashBatchBackendResult::Failed { completed, error } => {
+            (completed, vec![error], Vec::new(), false)
+        }
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum TrashBatchBackendResult {
     Completed,
-    Failed { completed: usize, error: String },
+    #[cfg(any(test, target_os = "macos"))]
+    CompletedWithWarning {
+        completed: usize,
+        warning: String,
+    },
+    Failed {
+        completed: usize,
+        error: String,
+    },
 }
 
 #[cfg(unix)]
-fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)> {
+fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, Vec<String>, bool)> {
     use crate::{
         config::{InvocationContext, invoking_user_context},
         user_fs_helper::Request,
@@ -591,6 +640,7 @@ fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)>
         InvocationContext::ElevatedUnresolved => Some((
             0,
             vec!["Could not resolve invoking user; nothing was trashed".to_string()],
+            Vec::new(),
             false,
         )),
         InvocationContext::Elevated(user) => {
@@ -600,9 +650,15 @@ fn trash_as_invoking_user(paths: &[&Path]) -> Option<(usize, Vec<String>, bool)>
                 Ok(response) => (
                     response.completed,
                     response.error.into_iter().collect(),
+                    response.warning.into_iter().collect(),
                     false,
                 ),
-                Err(error) => (0, vec![format!("Could not trash items: {error}")], false),
+                Err(error) => (
+                    0,
+                    vec![format!("Could not trash items: {error}")],
+                    Vec::new(),
+                    false,
+                ),
             })
         }
     }
@@ -615,44 +671,207 @@ pub(crate) fn run_user_trash_helper(paths: &[PathBuf]) -> crate::user_fs_helper:
         TrashBatchBackendResult::Completed => crate::user_fs_helper::Response {
             completed: paths.len(),
             error: None,
+            warning: None,
         },
+        #[cfg(any(test, target_os = "macos"))]
+        TrashBatchBackendResult::CompletedWithWarning { completed, warning } => {
+            crate::user_fs_helper::Response {
+                completed,
+                error: None,
+                warning: Some(warning),
+            }
+        }
         TrashBatchBackendResult::Failed { completed, error } => crate::user_fs_helper::Response {
             completed,
             error: Some(error),
+            warning: None,
         },
     }
 }
 
 fn trash_with_system_backend(paths: &[&Path]) -> TrashBatchBackendResult {
     #[cfg(target_os = "linux")]
-    let result = trash_with_gio_first(paths);
-
-    #[cfg(not(target_os = "linux"))]
-    let result = match trash_with_crate(paths) {
-        Ok(()) => TrashBatchBackendResult::Completed,
-        Err(error) => TrashBatchBackendResult::Failed {
-            completed: 0,
-            error,
-        },
-    };
+    return trash_with_gio_first(paths);
 
     #[cfg(target_os = "macos")]
-    if result == TrashBatchBackendResult::Completed {
-        let origins = paths
-            .iter()
-            .filter_map(|path| {
-                let name = path.file_name()?.to_str()?.to_owned();
-                Some((name, path.to_path_buf()))
-            })
-            .collect::<Vec<_>>();
-        crate::fs::save_restore_origins(&origins);
-    }
+    return trash_with_macos_finder(paths);
 
-    result
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        match trash_with_crate(paths) {
+            Ok(()) => TrashBatchBackendResult::Completed,
+            Err(error) => TrashBatchBackendResult::Failed {
+                completed: 0,
+                error,
+            },
+        }
+    }
 }
 
 fn trash_with_crate(paths: &[&Path]) -> Result<(), String> {
     ::trash::delete_all(paths.iter().copied()).map_err(|e| e.to_string())
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TrashEntryIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+type TrashSnapshot = HashMap<OsString, TrashEntryIdentity>;
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Debug, Eq, PartialEq)]
+enum TrashNameCorrelationError {
+    Missing,
+    Ambiguous(usize),
+}
+
+/// Correlates one source with the single newly-created Trash entry carrying
+/// the same stable filesystem identity. Names are treated as opaque; Finder's
+/// collision naming scheme is never parsed or guessed.
+#[cfg(any(test, target_os = "macos"))]
+fn correlate_trash_name(
+    before: &TrashSnapshot,
+    after: &TrashSnapshot,
+    source: TrashEntryIdentity,
+) -> Result<OsString, TrashNameCorrelationError> {
+    let mut matches = after
+        .iter()
+        .filter(|(name, identity)| !before.contains_key(*name) && **identity == source)
+        .map(|(name, _)| name.clone());
+    let Some(name) = matches.next() else {
+        return Err(TrashNameCorrelationError::Missing);
+    };
+    let additional = matches.count();
+    if additional == 0 {
+        Ok(name)
+    } else {
+        Err(TrashNameCorrelationError::Ambiguous(additional + 1))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn trash_with_macos_finder(paths: &[&Path]) -> TrashBatchBackendResult {
+    let trash_dir = crate::config::trash_home_dir().map(|home| home.join(".Trash"));
+    let before = trash_dir
+        .as_deref()
+        .ok_or_else(|| "could not determine the selected user's Trash directory".to_string())
+        .and_then(macos_trash_snapshot);
+    let source_identities = paths
+        .iter()
+        .map(|path| {
+            macos_file_identity(path)
+                .map_err(|error| format!("could not identify {:?} before Trash: {error}", path))
+        })
+        .collect::<Vec<_>>();
+
+    if let Err(error) = trash_with_crate(paths) {
+        return TrashBatchBackendResult::Failed {
+            completed: 0,
+            error,
+        };
+    }
+
+    let completed = paths.len();
+    let mut warnings = Vec::new();
+    let mut origins = Vec::new();
+
+    match (trash_dir.as_deref(), before) {
+        (_, Err(error)) => warnings.push(error),
+        (Some(trash_dir), Ok(before)) => match macos_trash_snapshot(trash_dir) {
+            Err(error) => warnings.push(error),
+            Ok(after) => {
+                for (path, identity) in paths.iter().zip(source_identities) {
+                    let identity = match identity {
+                        Ok(identity) => identity,
+                        Err(error) => {
+                            warnings.push(error);
+                            continue;
+                        }
+                    };
+                    let actual_name = match correlate_trash_name(&before, &after, identity) {
+                        Ok(name) => name,
+                        Err(TrashNameCorrelationError::Missing) => {
+                            warnings.push(format!("for {:?}: no matching new Trash entry", path));
+                            continue;
+                        }
+                        Err(TrashNameCorrelationError::Ambiguous(count)) => {
+                            warnings.push(format!(
+                                "for {:?}: {count} matching new Trash entries",
+                                path
+                            ));
+                            continue;
+                        }
+                    };
+                    let Ok(actual_name) = actual_name.into_string() else {
+                        warnings.push(format!("for {:?}: Trash name is not valid UTF-8", path));
+                        continue;
+                    };
+                    origins.push((actual_name, (*path).to_path_buf()));
+                }
+            }
+        },
+        (None, Ok(_)) => unreachable!("a snapshot requires a Trash directory"),
+    }
+
+    if !origins.is_empty() {
+        match crate::fs::save_restore_origins_checked(&origins) {
+            Ok(rejected) => {
+                for path in rejected {
+                    warnings.push(format!("for {path:?}: original path is not valid UTF-8"));
+                }
+            }
+            Err(error) => warnings.push(format!("could not save Trash origins: {error}")),
+        }
+    }
+
+    finish_macos_trash(completed, warnings)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn finish_macos_trash(completed: usize, warnings: Vec<String>) -> TrashBatchBackendResult {
+    if warnings.is_empty() {
+        TrashBatchBackendResult::Completed
+    } else {
+        TrashBatchBackendResult::CompletedWithWarning {
+            completed,
+            warning: warnings.join("; "),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn macos_file_identity(path: &Path) -> Result<TrashEntryIdentity, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::symlink_metadata(path)
+        .map(|metadata| TrashEntryIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn macos_trash_snapshot(trash_dir: &Path) -> Result<TrashSnapshot, String> {
+    let entries = match fs::read_dir(trash_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(TrashSnapshot::new());
+        }
+        Err(error) => return Err(format!("could not read {:?}: {error}", trash_dir)),
+    };
+    let mut snapshot = TrashSnapshot::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("could not read {:?}: {error}", trash_dir))?;
+        let identity = macos_file_identity(&entry.path())
+            .map_err(|error| format!("could not identify {:?}: {error}", entry.path()))?;
+        snapshot.insert(entry.file_name(), identity);
+    }
+    Ok(snapshot)
 }
 
 #[cfg(target_os = "linux")]

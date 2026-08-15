@@ -52,6 +52,110 @@ fn restore_origin_cleanup_collects_only_names_inside_selected_trash() {
     assert_eq!(names, vec!["inside.txt".to_string()]);
 }
 
+fn trash_identity(device: u64, inode: u64) -> TrashEntryIdentity {
+    TrashEntryIdentity { device, inode }
+}
+
+#[test]
+fn trash_name_correlation_preserves_finder_assigned_collision_names() {
+    let original = trash_identity(1, 10);
+    let collision = trash_identity(1, 11);
+    let before = TrashSnapshot::from([(OsString::from("unrelated.txt"), trash_identity(1, 99))]);
+    let after = TrashSnapshot::from([
+        (OsString::from("unrelated.txt"), trash_identity(1, 99)),
+        (OsString::from("foo.txt"), original),
+        (OsString::from("foo 11.53.48.txt"), collision),
+    ]);
+
+    assert_eq!(
+        correlate_trash_name(&before, &after, original),
+        Ok(OsString::from("foo.txt"))
+    );
+    assert_eq!(
+        correlate_trash_name(&before, &after, collision),
+        Ok(OsString::from("foo 11.53.48.txt"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn trash_snapshot_correlation_tracks_identity_across_renames() {
+    let root = make_tmp_dir("trash-snapshot-collision");
+    let trash_dir = root.join("Trash");
+    let source_a = root.join("A/foo.txt");
+    let source_b = root.join("B/foo.txt");
+    fs::create_dir_all(source_a.parent().unwrap()).unwrap();
+    fs::create_dir_all(source_b.parent().unwrap()).unwrap();
+    fs::create_dir(&trash_dir).unwrap();
+    fs::write(&source_a, b"from A").unwrap();
+    fs::write(&source_b, b"from B").unwrap();
+    let identity_a = macos_file_identity(&source_a).unwrap();
+    let identity_b = macos_file_identity(&source_b).unwrap();
+    let before = macos_trash_snapshot(&trash_dir).unwrap();
+
+    fs::rename(&source_a, trash_dir.join("foo.txt")).unwrap();
+    fs::rename(&source_b, trash_dir.join("foo 11.53.48.txt")).unwrap();
+    let after = macos_trash_snapshot(&trash_dir).unwrap();
+
+    assert_eq!(
+        correlate_trash_name(&before, &after, identity_a),
+        Ok(OsString::from("foo.txt"))
+    );
+    assert_eq!(
+        correlate_trash_name(&before, &after, identity_b),
+        Ok(OsString::from("foo 11.53.48.txt"))
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn trash_name_correlation_rejects_ambiguous_identity_matches() {
+    let identity = trash_identity(1, 10);
+    let after = TrashSnapshot::from([
+        (OsString::from("foo.txt"), identity),
+        (OsString::from("foo 11.53.48.txt"), identity),
+    ]);
+
+    assert_eq!(
+        correlate_trash_name(&TrashSnapshot::new(), &after, identity),
+        Err(TrashNameCorrelationError::Ambiguous(2))
+    );
+}
+
+#[test]
+fn trash_name_correlation_never_reuses_preexisting_names() {
+    let identity = trash_identity(1, 10);
+    let before = TrashSnapshot::from([(OsString::from("foo.txt"), identity)]);
+    let after = before.clone();
+
+    assert_eq!(
+        correlate_trash_name(&before, &after, identity),
+        Err(TrashNameCorrelationError::Missing)
+    );
+}
+
+#[test]
+fn restore_metadata_warning_preserves_completed_trash_count() {
+    assert_eq!(
+        finish_macos_trash(1, vec!["store is read-only".to_string()]),
+        TrashBatchBackendResult::CompletedWithWarning {
+            completed: 1,
+            warning: "store is read-only".to_string(),
+        }
+    );
+}
+
+#[test]
+fn restore_metadata_warning_is_rendered_as_partial_success() {
+    let status = format_restore_metadata_warning("Trashed", 1, &["store is read-only".to_string()]);
+
+    assert_eq!(
+        status,
+        "Trashed 1 item; restore metadata could not be saved: store is read-only"
+    );
+    assert!(!status.contains("error"));
+}
+
 // ── GIO trash backend ─────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]

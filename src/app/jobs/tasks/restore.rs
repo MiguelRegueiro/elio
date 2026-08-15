@@ -238,10 +238,10 @@ fn restore_as_invoking_user(path: &std::path::Path) -> anyhow::Result<Option<Str
 fn restore_helper_response(
     response: crate::user_fs_helper::Response,
 ) -> anyhow::Result<Option<String>> {
-    match (response.completed, response.error) {
-        (1, warning) => Ok(warning),
-        (0, Some(error)) => anyhow::bail!(error),
-        (0, None) => anyhow::bail!("helper did not restore the item"),
+    match (response.completed, response.error, response.warning) {
+        (1, None, warning) => Ok(warning),
+        (0, Some(error), None) => anyhow::bail!(error),
+        (0, None, None) => anyhow::bail!("helper did not restore the item"),
         _ => anyhow::bail!("invalid invoking-user restore response"),
     }
 }
@@ -278,7 +278,8 @@ mod tests {
     fn completed_helper_restore_preserves_metadata_warning() {
         let warning = restore_helper_response(crate::user_fs_helper::Response {
             completed: 1,
-            error: Some("could not update Trash restore metadata".to_string()),
+            error: None,
+            warning: Some("could not update Trash restore metadata".to_string()),
         })
         .unwrap();
 
@@ -293,6 +294,7 @@ mod tests {
         let error = restore_helper_response(crate::user_fs_helper::Response {
             completed: 0,
             error: Some("permission denied".to_string()),
+            warning: None,
         })
         .unwrap_err();
 

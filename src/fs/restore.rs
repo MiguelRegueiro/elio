@@ -4,6 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(any(test, target_os = "macos"))]
+use std::io::Write;
+
+#[cfg(any(test, target_os = "macos"))]
+static RESTORE_ORIGINS_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ---------------------------------------------------------------------------
 // Restore from trash
 // ---------------------------------------------------------------------------
@@ -115,7 +121,7 @@ fn restore_trash_item_freedesktop(entry_path: &Path, info_dir: PathBuf) -> anyho
 // To work around this, whenever Elio trashes a file it immediately records
 // the original path in its own JSON store at
 //   ~/Library/Application Support/elio/trash-origins.json
-// keyed by the expected filename in ~/.Trash.  Restore checks this store
+// keyed by the actual filename assigned in ~/.Trash.  Restore checks this store
 // first.  The DS_Store parser is kept as a fallback for files trashed
 // directly by Finder (which does write ptbL).
 
@@ -125,39 +131,70 @@ fn restore_origins_path() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("elio").join("trash-origins.json"))
 }
 
-/// Records `(trash_name, original_path)` pairs in the restore-origins store.
-/// `trash_name` is the filename as it will appear in `~/.Trash` (= the
-/// original filename when there is no collision).  Best-effort: silently
-/// ignored on any I/O error.
+/// Records `(actual_trash_name, original_path)` pairs in the restore-origins
+/// store. Finder may rename an item on collision, so callers must supply the
+/// name observed after the Trash operation. All failures are reported.
 #[cfg(target_os = "macos")]
-pub(crate) fn save_restore_origins(items: &[(String, PathBuf)]) {
+pub(crate) fn save_restore_origins_checked(
+    items: &[(String, PathBuf)],
+) -> anyhow::Result<Vec<PathBuf>> {
     let Some(path) = restore_origins_path() else {
-        return;
+        anyhow::bail!("cannot determine restore-origins path");
     };
-    let mut map: std::collections::HashMap<String, String> = fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    save_restore_origins_at_path_checked(&path, items)
+}
 
+#[cfg(any(test, target_os = "macos"))]
+fn save_restore_origins_at_path_checked(
+    path: &Path,
+    items: &[(String, PathBuf)],
+) -> anyhow::Result<Vec<PathBuf>> {
+    save_restore_origins_at_path_with(path, items, write_restore_origins_atomically)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn save_restore_origins_at_path_with(
+    path: &Path,
+    items: &[(String, PathBuf)],
+    persist: impl FnOnce(&Path, &[u8]) -> std::io::Result<()>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut additions = Vec::with_capacity(items.len());
+    let mut rejected = Vec::new();
     for (name, original) in items {
-        if let Some(s) = original.to_str() {
-            map.insert(name.clone(), s.to_owned());
+        if let Some(original) = original.to_str() {
+            additions.push((name.clone(), original.to_owned()));
+        } else {
+            rejected.push(original.clone());
         }
     }
 
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+    if additions.is_empty() {
+        return Ok(rejected);
     }
-    if let Ok(json) = serde_json::to_vec_pretty(&map) {
-        let _ = fs::write(&path, json);
-    }
+
+    with_restore_origins_transaction(path, || {
+        let mut map: std::collections::HashMap<String, String> = match fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("cannot parse {:?}", path))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
+            Err(error) => return Err(error).with_context(|| format!("cannot read {:?}", path)),
+        };
+        map.extend(additions);
+
+        let json = serde_json::to_vec_pretty(&map)
+            .with_context(|| format!("cannot serialize {:?}", path))?;
+        persist(path, &json).with_context(|| format!("cannot write {:?}", path))?;
+        Ok(rejected)
+    })
 }
 
-/// Removes entries for the given `trash_names` from the restore-origins store.
-/// For each name, first tries an exact key match, then strips any macOS
-/// collision suffix (` 2`, ` 3`, …) and tries again — so "foo 2.txt"
-/// correctly removes the "foo.txt" key that was saved at trash time.
-/// Best-effort: silently ignores any I/O error.
+/// Removes exact `trash_names` from the restore-origins store. Finder-assigned
+/// collision names are stored directly, so cleanup never infers another key.
+/// Best-effort for historical normal/direct-root call sites.
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_restore_origins(trash_names: &[&str]) {
     let _ = remove_restore_origins_checked(trash_names);
@@ -176,26 +213,36 @@ pub(crate) fn remove_restore_origins_checked(trash_names: &[&str]) -> anyhow::Re
 
 #[cfg(any(test, target_os = "macos"))]
 fn remove_restore_origins_at_path_checked(path: &Path, trash_names: &[&str]) -> anyhow::Result<()> {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("cannot read {:?}", path));
-        }
-    };
-    let mut map: std::collections::HashMap<String, String> =
-        serde_json::from_slice(&bytes).with_context(|| format!("cannot parse {:?}", path))?;
-    if remove_from_origins_map(&mut map, trash_names) {
-        let json = serde_json::to_vec_pretty(&map)
-            .with_context(|| format!("cannot serialize {:?}", path))?;
-        fs::write(path, json).with_context(|| format!("cannot write {:?}", path))?;
-    }
-    Ok(())
+    remove_restore_origins_at_path_with(path, trash_names, write_restore_origins_atomically)
 }
 
-/// Core map-mutation logic for [`remove_restore_origins`]: removes each name
-/// in `trash_names` from `map`, trying the exact key first then the
-/// collision-stripped base name.  Returns `true` if the map was modified.
+#[cfg(any(test, target_os = "macos"))]
+fn remove_restore_origins_at_path_with(
+    path: &Path,
+    trash_names: &[&str],
+    persist: impl FnOnce(&Path, &[u8]) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    with_restore_origins_transaction(path, || {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("cannot read {:?}", path));
+            }
+        };
+        let mut map: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&bytes).with_context(|| format!("cannot parse {:?}", path))?;
+        if remove_from_origins_map(&mut map, trash_names) {
+            let json = serde_json::to_vec_pretty(&map)
+                .with_context(|| format!("cannot serialize {:?}", path))?;
+            persist(path, &json).with_context(|| format!("cannot write {:?}", path))?;
+        }
+        Ok(())
+    })
+}
+
+/// Core map-mutation logic for [`remove_restore_origins`]. Returns `true` if
+/// at least one exact key was removed.
 #[cfg(any(test, target_os = "macos"))]
 fn remove_from_origins_map(
     map: &mut std::collections::HashMap<String, String>,
@@ -205,60 +252,144 @@ fn remove_from_origins_map(
     for &name in trash_names {
         if map.remove(name).is_some() {
             changed = true;
-            continue;
-        }
-        // Collision case: the file was stored under its original name (e.g.
-        // "foo.txt") but appears in trash as "foo 2.txt".  Strip the suffix
-        // and try again.
-        let p = Path::new(name);
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str())
-            && let Some(base_stem) = strip_macos_collision_suffix(stem)
-        {
-            let ext = p.extension().and_then(|e| e.to_str());
-            let base_name = match ext {
-                Some(e) => format!("{base_stem}.{e}"),
-                None => base_stem.to_owned(),
-            };
-            if map.remove(&base_name).is_some() {
-                changed = true;
-            }
         }
     }
     changed
 }
 
-/// Looks up the original path for a file currently named `trash_name`.
-/// Also tries stripping macOS collision suffixes (` 2`, ` 3`, …) from the
-/// stem, so files renamed on collision can still be matched.
+/// Looks up the original path for the exact filename currently in Trash.
 #[cfg(target_os = "macos")]
 fn load_restore_origin(trash_name: &str) -> Option<PathBuf> {
     let path = restore_origins_path()?;
-    let map: std::collections::HashMap<String, String> =
-        serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-
-    if let Some(orig) = map.get(trash_name) {
-        return Some(PathBuf::from(orig));
-    }
-
-    // Collision case: "foo 2.txt" → look up "foo.txt".
-    let p = Path::new(trash_name);
-    let stem = p.file_stem().and_then(|s| s.to_str())?;
-    let ext = p.extension().and_then(|e| e.to_str());
-    let base_stem = strip_macos_collision_suffix(stem)?;
-    let base_name = match ext {
-        Some(e) => format!("{base_stem}.{e}"),
-        None => base_stem.to_owned(),
-    };
-    map.get(&base_name).map(|s| PathBuf::from(s))
+    with_restore_origins_transaction(&path, || {
+        let map: std::collections::HashMap<String, String> =
+            serde_json::from_slice(&fs::read(&path)?)
+                .with_context(|| format!("cannot parse {:?}", path))?;
+        Ok(restore_origin_from_map(&map, trash_name))
+    })
+    .ok()
+    .flatten()
 }
 
-/// Strips a macOS collision suffix (` 2`, ` 3`, …) from a file stem.
-/// Returns `Some(base)` if a suffix was stripped, `None` otherwise.
 #[cfg(any(test, target_os = "macos"))]
-fn strip_macos_collision_suffix(stem: &str) -> Option<&str> {
-    let (base, suffix) = stem.rsplit_once(' ')?;
-    let n: u64 = suffix.parse().ok()?;
-    (n >= 2).then_some(base)
+fn restore_origin_from_map(
+    map: &std::collections::HashMap<String, String>,
+    trash_name: &str,
+) -> Option<PathBuf> {
+    map.get(trash_name).map(PathBuf::from)
+}
+
+#[cfg(any(test, target_os = "macos"))]
+/// Holds the complete metadata transaction under both a process-wide mutex
+/// and a stable sidecar file lock shared by independent Elio/helper processes.
+fn with_restore_origins_transaction<T>(
+    path: &Path,
+    operation: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let _process_guard = RESTORE_ORIGINS_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("cannot create restore-origins directory {:?}", parent))?;
+
+    let _file_guard = RestoreOriginsFileLock::acquire(path)?;
+
+    operation()
+}
+
+#[cfg(any(test, target_os = "macos"))]
+struct RestoreOriginsFileLock(fs::File);
+
+#[cfg(any(test, target_os = "macos"))]
+impl RestoreOriginsFileLock {
+    fn acquire(path: &Path) -> anyhow::Result<Self> {
+        let lock_path = restore_origins_lock_path(path)?;
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(&lock_path)
+            .with_context(|| format!("cannot open restore-origins lock {:?}", lock_path))?;
+        file.lock()
+            .with_context(|| format!("cannot lock restore-origins store {:?}", lock_path))?;
+        Ok(Self(file))
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn restore_origins_lock_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("restore-origins path has no file name"))?;
+    let mut lock_name = file_name.to_os_string();
+    lock_name.push(".lock");
+    Ok(path.with_file_name(lock_name))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+impl Drop for RestoreOriginsFileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn write_restore_origins_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let process_id = std::process::id();
+
+    for attempt in 0..100 {
+        let temp_path = parent.join(format!(".{file_name}.elio-tmp-{process_id}-{attempt}"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&temp_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+
+        let result = (|| {
+            file.write_all(contents)?;
+            file.sync_all()?;
+            drop(file);
+
+            #[cfg(windows)]
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+            fs::rename(&temp_path, path)?;
+
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        return result;
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a temporary restore-origins file",
+    ))
 }
 
 /// Moves `entry_path` to `original_path`, creating parent directories as

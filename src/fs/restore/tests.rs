@@ -9,6 +9,13 @@ fn temp_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("elio-{label}-{unique}"))
 }
 
+fn cleanup_restore_origins_test_store(path: &Path) {
+    fs::remove_file(path).ok();
+    if let Ok(lock_path) = restore_origins_lock_path(path) {
+        fs::remove_file(lock_path).ok();
+    }
+}
+
 /// Builds a minimal FreeDesktop trash layout under `root`:
 ///   root/
 ///     files/<name>  ← the trashed item (a regular file)
@@ -203,28 +210,39 @@ fn remove_from_origins_map_removes_exact_match() {
 }
 
 #[test]
-fn remove_from_origins_map_handles_collision_suffix_with_extension() {
-    // "report.pdf" was stored as the key but macOS renamed it "report 2.pdf"
-    // in the trash due to a collision.
-    let mut map = std::collections::HashMap::from([(
-        "report.pdf".to_string(),
-        "/home/user/report.pdf".to_string(),
-    )]);
-    let changed = remove_from_origins_map(&mut map, &["report 2.pdf"]);
+fn remove_from_origins_map_removes_only_exact_timestamped_collision_key() {
+    let mut map = std::collections::HashMap::from([
+        (
+            "report.pdf".to_string(),
+            "/Users/paco/A/report.pdf".to_string(),
+        ),
+        (
+            "report 11.53.48.pdf".to_string(),
+            "/Users/paco/B/report.pdf".to_string(),
+        ),
+    ]);
+
+    let changed = remove_from_origins_map(&mut map, &["report 11.53.48.pdf"]);
+
     assert!(changed);
-    assert!(
-        map.is_empty(),
-        "collision-suffixed name should strip and remove base key"
+    assert_eq!(
+        map.get("report.pdf").map(String::as_str),
+        Some("/Users/paco/A/report.pdf")
     );
+    assert!(!map.contains_key("report 11.53.48.pdf"));
 }
 
 #[test]
-fn remove_from_origins_map_handles_collision_suffix_without_extension() {
-    let mut map =
-        std::collections::HashMap::from([("notes".to_string(), "/home/user/notes".to_string())]);
-    let changed = remove_from_origins_map(&mut map, &["notes 2"]);
-    assert!(changed);
-    assert!(map.is_empty());
+fn remove_from_origins_map_never_infers_a_base_name() {
+    let mut map = std::collections::HashMap::from([(
+        "report.pdf".to_string(),
+        "/Users/paco/A/report.pdf".to_string(),
+    )]);
+
+    let changed = remove_from_origins_map(&mut map, &["report 2.pdf"]);
+
+    assert!(!changed);
+    assert_eq!(map.len(), 1);
 }
 
 #[test]
@@ -263,9 +281,273 @@ fn remove_from_origins_map_no_op_on_empty_map() {
 }
 
 #[test]
+fn restore_origin_lookup_uses_exact_finder_assigned_names() {
+    let map = std::collections::HashMap::from([
+        ("foo.txt".to_string(), "/Users/paco/A/foo.txt".to_string()),
+        (
+            "foo 11.53.48.txt".to_string(),
+            "/Users/paco/B/foo.txt".to_string(),
+        ),
+    ]);
+
+    assert_eq!(
+        restore_origin_from_map(&map, "foo.txt"),
+        Some(PathBuf::from("/Users/paco/A/foo.txt"))
+    );
+    assert_eq!(
+        restore_origin_from_map(&map, "foo 11.53.48.txt"),
+        Some(PathBuf::from("/Users/paco/B/foo.txt"))
+    );
+    assert_eq!(restore_origin_from_map(&map, "foo 2.txt"), None);
+}
+
+#[test]
+fn checked_origin_save_preserves_distinct_collision_mappings_and_existing_entries() {
+    let path = temp_path("origins-save-collisions");
+    fs::write(&path, br#"{"existing.txt":"/Users/paco/existing.txt"}"#)
+        .expect("failed to write existing origins store");
+    let items = vec![
+        (
+            "foo.txt".to_string(),
+            PathBuf::from("/Users/paco/A/foo.txt"),
+        ),
+        (
+            "foo 11.53.48.txt".to_string(),
+            PathBuf::from("/Users/paco/B/foo.txt"),
+        ),
+    ];
+
+    let rejected = save_restore_origins_at_path_checked(&path, &items)
+        .expect("distinct Trash names should be persisted");
+    assert!(rejected.is_empty());
+
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        map.get("existing.txt").map(String::as_str),
+        Some("/Users/paco/existing.txt")
+    );
+    assert_eq!(
+        map.get("foo.txt").map(String::as_str),
+        Some("/Users/paco/A/foo.txt")
+    );
+    assert_eq!(
+        map.get("foo 11.53.48.txt").map(String::as_str),
+        Some("/Users/paco/B/foo.txt")
+    );
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn checked_origin_save_keeps_valid_mappings_when_an_origin_is_not_utf8() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let path = temp_path("origins-save-non-utf8");
+    fs::write(&path, br#"{"existing.txt":"/Users/paco/existing.txt"}"#)
+        .expect("failed to write existing origins store");
+    let invalid = PathBuf::from(OsString::from_vec(b"/Users/paco/bad-\xff.txt".to_vec()));
+    let items = vec![
+        (
+            "valid.txt".to_string(),
+            PathBuf::from("/Users/paco/valid.txt"),
+        ),
+        ("invalid.txt".to_string(), invalid.clone()),
+    ];
+
+    let rejected = save_restore_origins_at_path_checked(&path, &items)
+        .expect("representable mappings should still be saved");
+
+    assert_eq!(rejected, vec![invalid]);
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        map.get("existing.txt").map(String::as_str),
+        Some("/Users/paco/existing.txt")
+    );
+    assert_eq!(
+        map.get("valid.txt").map(String::as_str),
+        Some("/Users/paco/valid.txt")
+    );
+    assert!(!map.contains_key("invalid.txt"));
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[test]
+fn concurrent_origin_saves_preserve_both_updates() {
+    use std::{
+        sync::mpsc::{self, RecvTimeoutError},
+        thread,
+        time::Duration,
+    };
+
+    let path = temp_path("origins-concurrent-save-save");
+    let (first_entered_tx, first_entered_rx) = mpsc::sync_channel(0);
+    let (release_first_tx, release_first_rx) = mpsc::sync_channel(0);
+    let first_path = path.clone();
+    let first = thread::spawn(move || {
+        let items = vec![("first.txt".to_string(), PathBuf::from("/A/first.txt"))];
+        save_restore_origins_at_path_with(&first_path, &items, |path, json| {
+            first_entered_tx.send(()).unwrap();
+            release_first_rx.recv().unwrap();
+            write_restore_origins_atomically(path, json)
+        })
+    });
+    first_entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("first save did not enter persistence");
+
+    let (second_entered_tx, second_entered_rx) = mpsc::sync_channel(0);
+    let second_path = path.clone();
+    let second = thread::spawn(move || {
+        let items = vec![("second.txt".to_string(), PathBuf::from("/B/second.txt"))];
+        save_restore_origins_at_path_with(&second_path, &items, |path, json| {
+            second_entered_tx.send(()).unwrap();
+            write_restore_origins_atomically(path, json)
+        })
+    });
+
+    assert!(matches!(
+        second_entered_rx.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+    release_first_tx.send(()).unwrap();
+    assert!(first.join().unwrap().unwrap().is_empty());
+    second_entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("second save did not resume after the first transaction");
+    assert!(second.join().unwrap().unwrap().is_empty());
+
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        map.get("first.txt").map(String::as_str),
+        Some("/A/first.txt")
+    );
+    assert_eq!(
+        map.get("second.txt").map(String::as_str),
+        Some("/B/second.txt")
+    );
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[test]
+fn concurrent_origin_save_and_remove_preserve_unrelated_updates() {
+    use std::{
+        sync::mpsc::{self, RecvTimeoutError},
+        thread,
+        time::Duration,
+    };
+
+    let path = temp_path("origins-concurrent-save-remove");
+    fs::write(
+        &path,
+        br#"{"remove.txt":"/old/remove.txt","keep.txt":"/old/keep.txt"}"#,
+    )
+    .unwrap();
+    let (save_entered_tx, save_entered_rx) = mpsc::sync_channel(0);
+    let (release_save_tx, release_save_rx) = mpsc::sync_channel(0);
+    let save_path = path.clone();
+    let save = thread::spawn(move || {
+        let items = vec![("new.txt".to_string(), PathBuf::from("/new/new.txt"))];
+        save_restore_origins_at_path_with(&save_path, &items, |path, json| {
+            save_entered_tx.send(()).unwrap();
+            release_save_rx.recv().unwrap();
+            write_restore_origins_atomically(path, json)
+        })
+    });
+    save_entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("save did not enter persistence");
+
+    let (remove_entered_tx, remove_entered_rx) = mpsc::sync_channel(0);
+    let remove_path = path.clone();
+    let remove = thread::spawn(move || {
+        remove_restore_origins_at_path_with(&remove_path, &["remove.txt"], |path, json| {
+            remove_entered_tx.send(()).unwrap();
+            write_restore_origins_atomically(path, json)
+        })
+    });
+
+    assert!(matches!(
+        remove_entered_rx.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+    release_save_tx.send(()).unwrap();
+    assert!(save.join().unwrap().unwrap().is_empty());
+    remove_entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("remove did not resume after the save transaction");
+    remove.join().unwrap().unwrap();
+
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(!map.contains_key("remove.txt"));
+    assert_eq!(
+        map.get("keep.txt").map(String::as_str),
+        Some("/old/keep.txt")
+    );
+    assert_eq!(map.get("new.txt").map(String::as_str), Some("/new/new.txt"));
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[test]
+fn restore_origins_sidecar_lock_serializes_independent_file_handles() {
+    use std::{
+        sync::mpsc::{self, RecvTimeoutError},
+        thread,
+        time::Duration,
+    };
+
+    let path = temp_path("origins-sidecar-lock");
+    let first = RestoreOriginsFileLock::acquire(&path).unwrap();
+    let (acquired_tx, acquired_rx) = mpsc::sync_channel(0);
+    let second_path = path.clone();
+    let second = thread::spawn(move || {
+        let _second = RestoreOriginsFileLock::acquire(&second_path).unwrap();
+        acquired_tx.send(()).unwrap();
+    });
+
+    assert!(matches!(
+        acquired_rx.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+    drop(first);
+    acquired_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("second file handle did not acquire the released sidecar lock");
+    second.join().unwrap();
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[test]
+fn checked_origin_save_reports_persistence_failure_without_touching_existing_mappings() {
+    let path = temp_path("origins-save-failure");
+    let existing = br#"{"existing.txt":"/Users/paco/existing.txt"}"#;
+    fs::write(&path, existing).expect("failed to write existing origins store");
+    let items = vec![(
+        "foo.txt".to_string(),
+        PathBuf::from("/Users/paco/A/foo.txt"),
+    )];
+
+    let error = save_restore_origins_at_path_with(&path, &items, |_, _| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "store is read-only",
+        ))
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("cannot write"));
+    assert_eq!(fs::read(&path).unwrap(), existing);
+    cleanup_restore_origins_test_store(&path);
+}
+
+#[test]
 fn checked_origin_removal_accepts_missing_store() {
     let path = temp_path("origins-missing");
     assert!(remove_restore_origins_at_path_checked(&path, &["foo.txt"]).is_ok());
+    cleanup_restore_origins_test_store(&path);
 }
 
 #[test]
@@ -278,7 +560,7 @@ fn checked_origin_removal_accepts_missing_key_without_rewriting() {
         .expect("missing key should be a successful no-op");
 
     assert_eq!(fs::read(&path).unwrap(), contents);
-    fs::remove_file(path).ok();
+    cleanup_restore_origins_test_store(&path);
 }
 
 #[test]
@@ -300,7 +582,7 @@ fn checked_origin_removal_persists_matching_mutation() {
         map.get("notes.txt").map(String::as_str),
         Some("/Users/paco/notes.txt")
     );
-    fs::remove_file(path).ok();
+    cleanup_restore_origins_test_store(&path);
 }
 
 #[test]
@@ -312,7 +594,7 @@ fn checked_origin_removal_rejects_malformed_store() {
 
     assert!(error.to_string().contains("cannot parse"));
     assert_eq!(fs::read(&path).unwrap(), b"{");
-    fs::remove_file(path).ok();
+    cleanup_restore_origins_test_store(&path);
 }
 
 #[cfg(unix)]
@@ -324,7 +606,8 @@ fn checked_origin_removal_reports_read_failure() {
     let error = remove_restore_origins_at_path_checked(&path, &["report.pdf"]).unwrap_err();
 
     assert!(error.to_string().contains("cannot read"));
-    fs::remove_dir(path).ok();
+    fs::remove_dir(&path).ok();
+    cleanup_restore_origins_test_store(&path);
 }
 
 #[cfg(unix)]
@@ -335,15 +618,19 @@ fn checked_origin_removal_reports_write_failure() {
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
-    let path = temp_path("origins-write-error");
+    let root = temp_path("origins-write-error");
+    fs::create_dir(&root).expect("failed to create origins directory");
+    let path = root.join("trash-origins.json");
     fs::write(&path, br#"{"report.pdf":"/Users/paco/report.pdf"}"#)
         .expect("failed to write origins store");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
-        .expect("failed to make origins store read-only");
+    fs::write(restore_origins_lock_path(&path).unwrap(), b"")
+        .expect("failed to create restore-origins lock");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o500))
+        .expect("failed to make origins directory read-only");
 
     let error = remove_restore_origins_at_path_checked(&path, &["report.pdf"]).unwrap_err();
 
     assert!(error.to_string().contains("cannot write"));
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).ok();
-    fs::remove_file(path).ok();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).ok();
+    fs::remove_dir_all(root).ok();
 }
