@@ -74,7 +74,7 @@ keyword = "#abcdef"
     );
     let _xdg = EnvVarGuard::set_path("XDG_CONFIG_HOME", &config_home);
 
-    let theme = load_theme_from_disk();
+    let theme = load_theme_from_disk(None).expect("theme should load from XDG config home");
 
     assert_eq!(theme.preview.code.keyword, rgb(0xab, 0xcd, 0xef));
     assert_eq!(theme.classes.get(&FileClass::Code).unwrap().icon, "X");
@@ -102,7 +102,7 @@ keyword = "#12"
     );
     let _xdg = EnvVarGuard::set_path("XDG_CONFIG_HOME", &config_home);
 
-    let theme = load_theme_from_disk();
+    let theme = load_theme_from_disk(None).expect("invalid theme should fall back");
     let default_theme = Theme::default_theme();
 
     assert_eq!(theme.palette.bg, default_theme.palette.bg);
@@ -119,6 +119,84 @@ keyword = "#12"
 
     fs::remove_file(path).expect("failed to remove theme file");
     fs::remove_dir_all(config_home).expect("failed to remove config root");
+}
+
+#[test]
+fn load_theme_from_disk_reads_explicit_theme_path() {
+    let root = temp_path("load-explicit-theme");
+    let path = root.join("custom-theme.toml");
+    fs::create_dir_all(&root).expect("failed to create explicit theme directory");
+    fs::write(
+        &path,
+        r##"
+[preview.code]
+keyword = "#123456"
+"##,
+    )
+    .expect("failed to write explicit theme file");
+
+    let theme = load_theme_from_disk(Some(&path)).expect("explicit theme should load");
+
+    assert_eq!(theme.preview.code.keyword, rgb(0x12, 0x34, 0x56));
+    fs::remove_dir_all(root).expect("failed to remove explicit theme directory");
+}
+
+#[test]
+fn missing_explicit_theme_path_is_an_error() {
+    let path = temp_path("missing-explicit-theme").join("theme.toml");
+
+    let error = load_theme_from_disk(Some(&path))
+        .err()
+        .expect("missing explicit theme should fail");
+
+    assert!(error.to_string().contains(&format!(
+        "elio: failed to read theme from {}",
+        path.display()
+    )));
+}
+
+#[test]
+fn unreadable_explicit_theme_path_is_an_error() {
+    let root = temp_path("unreadable-explicit-theme");
+    let path = root.join("theme.toml");
+    fs::create_dir_all(&root).expect("failed to create explicit theme directory");
+    fs::write(&path, [0xff]).expect("failed to write invalid UTF-8 theme");
+
+    let error = load_theme_from_disk(Some(&path))
+        .err()
+        .expect("unreadable explicit theme should fail");
+
+    assert!(error.to_string().contains(&format!(
+        "elio: failed to read theme from {}",
+        path.display()
+    )));
+    fs::remove_dir_all(root).expect("failed to remove explicit theme directory");
+}
+
+#[test]
+fn invalid_explicit_theme_falls_back_to_default_theme() {
+    let root = temp_path("invalid-explicit-theme");
+    let path = root.join("theme.toml");
+    fs::create_dir_all(&root).expect("failed to create explicit theme directory");
+    fs::write(
+        &path,
+        r##"
+[preview.code]
+keyword = "#12"
+"##,
+    )
+    .expect("failed to write invalid explicit theme");
+
+    let theme = load_theme_from_disk(Some(&path))
+        .expect("invalid explicit theme should fall back to the default");
+    let default_theme = Theme::default_theme();
+
+    assert_eq!(theme.palette.bg, default_theme.palette.bg);
+    assert_eq!(
+        theme.preview.code.keyword,
+        default_theme.preview.code.keyword
+    );
+    fs::remove_dir_all(root).expect("failed to remove explicit theme directory");
 }
 
 #[test]

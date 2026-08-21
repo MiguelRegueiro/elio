@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added bulk archive extraction for selected archives. ([#241])
 - Added a Nord example theme. ([#270])
 - Added invoking-user-aware `sudo` and `doas` sessions on Unix: elio retains elevated filesystem access while using the invoking user's config, Places, shell, applications, editor, zoxide, and Trash/Restore; direct-root sessions continue using root's state.
+- Added `--config FILE` and `--theme FILE` to override the default configuration and theme paths. ([#274])
 
 ### Changed
 
@@ -330,6 +331,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.1.0]: https://github.com/elio-fm/elio/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/elio-fm/elio/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/elio-fm/elio/releases/tag/v1.0.0
+[#274]: https://github.com/elio-fm/elio/issues/274
 [#270]: https://github.com/elio-fm/elio/issues/270
 [#267]: https://github.com/elio-fm/elio/issues/267
 [#258]: https://github.com/elio-fm/elio/issues/258

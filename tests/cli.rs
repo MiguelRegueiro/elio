@@ -35,9 +35,13 @@ fn help_prints_usage() {
         "[PATH]               Start in a directory, or focus a file in its parent directory"
     ));
     assert!(stdout.contains("--chooser-file FILE  Write chosen paths to FILE, or stdout with '-'"));
-    assert!(stdout.contains("--cwd-file FILE  Write the final current directory to FILE on exit"));
-    assert!(stdout.contains("-h, --help           Print help"));
-    assert!(stdout.contains("-V, --version        Print version"));
+    assert!(stdout.contains("--config FILE        Load configuration from FILE"));
+    assert!(
+        stdout.contains("--cwd-file FILE      Write the final current directory to FILE on exit")
+    );
+    assert!(stdout.contains("--theme FILE         Load theme from FILE"));
+    assert!(stdout.contains("-h, --help               Print help"));
+    assert!(stdout.contains("-V, --version            Print version"));
     assert!(stdout.contains("Commands:"));
     assert!(
         stdout.contains(
@@ -80,6 +84,174 @@ fn mistyped_chooser_file_flag_exits_with_suggestion() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error: unexpected argument '--chooser' found"));
     assert!(stderr.contains("tip: a similar argument exists: '--chooser-file'"));
+}
+
+#[test]
+fn mistyped_config_flag_exits_with_suggestion() {
+    let output = elio()
+        .arg("--conf")
+        .output()
+        .expect("failed to run elio --conf");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: unexpected argument '--conf' found"));
+    assert!(stderr.contains("tip: a similar argument exists: '--config'"));
+}
+
+#[test]
+fn mistyped_theme_flag_exits_with_suggestion() {
+    let output = elio()
+        .arg("--them")
+        .output()
+        .expect("failed to run elio --them");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: unexpected argument '--them' found"));
+    assert!(stderr.contains("tip: a similar argument exists: '--theme'"));
+}
+
+#[test]
+fn config_and_theme_do_not_have_short_flags() {
+    for flag in ["-c", "-t"] {
+        let output = elio()
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run elio {flag}: {error}"));
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("error: unexpected argument '{flag}' found"))
+        );
+    }
+}
+
+#[test]
+fn config_requires_value() {
+    let output = elio()
+        .arg("--config")
+        .output()
+        .expect("failed to run elio --config");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: expected a file path after '--config'")
+    );
+}
+
+#[test]
+fn config_equals_requires_value() {
+    let output = elio()
+        .arg("--config=")
+        .output()
+        .expect("failed to run elio --config=");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: expected a file path after '--config'")
+    );
+}
+
+#[test]
+fn theme_requires_value() {
+    let output = elio()
+        .arg("--theme")
+        .output()
+        .expect("failed to run elio --theme");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: expected a file path after '--theme'")
+    );
+}
+
+#[test]
+fn theme_equals_requires_value() {
+    let output = elio()
+        .arg("--theme=")
+        .output()
+        .expect("failed to run elio --theme=");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: expected a file path after '--theme'")
+    );
+}
+
+#[test]
+fn duplicate_config_is_rejected() {
+    let output = elio()
+        .args(["--config", "first.toml", "--config=second.toml"])
+        .output()
+        .expect("failed to run elio with duplicate --config");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: '--config' cannot be used more than once")
+    );
+}
+
+#[test]
+fn duplicate_theme_is_rejected() {
+    let output = elio()
+        .args(["--theme", "first.toml", "--theme=second.toml"])
+        .output()
+        .expect("failed to run elio with duplicate --theme");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("error: '--theme' cannot be used more than once")
+    );
+}
+
+#[test]
+fn missing_explicit_config_fails_before_terminal_startup() {
+    let path = temp_path("missing-explicit-config").join("config.toml");
+    let output = elio()
+        .arg(format!("--config={}", path.display()))
+        .output()
+        .expect("failed to run elio with missing explicit config");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "elio: failed to read config from {}",
+        path.display()
+    )));
+}
+
+#[test]
+fn missing_explicit_theme_fails_before_terminal_startup() {
+    let path = temp_path("missing-explicit-theme").join("theme.toml");
+    let output = elio()
+        .arg("--theme")
+        .arg(&path)
+        .output()
+        .expect("failed to run elio with missing explicit theme");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "elio: failed to read theme from {}",
+        path.display()
+    )));
 }
 
 #[test]

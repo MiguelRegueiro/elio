@@ -41,7 +41,7 @@ pub fn run_at(cwd: PathBuf) -> Result<()> {
 }
 
 pub fn run_with_options(options: RunOptions) -> Result<()> {
-    runtime::run_with_startup_state(options, None, false, None).map(|_| ())
+    runtime::run_with_startup_state(options, None, false, None, None, None).map(|_| ())
 }
 
 #[doc(hidden)]
@@ -55,11 +55,15 @@ pub fn run_with_startup_options(
     start_focus: Option<PathBuf>,
     reveal_hidden_start_focus: bool,
     chooser_file: Option<PathBuf>,
+    config_file: Option<PathBuf>,
+    theme_file: Option<PathBuf>,
 ) -> Result<RunOutcome> {
     runtime::run_with_startup_state(
         options,
         start_focus,
         reveal_hidden_start_focus,
         chooser_file,
+        config_file,
+        theme_file,
     )
 }
