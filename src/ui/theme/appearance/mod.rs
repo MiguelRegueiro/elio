@@ -31,8 +31,12 @@ struct EntryClassCache {
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static ENTRY_CLASS_CACHE: OnceLock<Mutex<EntryClassCache>> = OnceLock::new();
 
-pub(crate) fn initialize() {
-    let _ = ACTIVE_THEME.get_or_init(load_theme_from_disk);
+pub(crate) fn initialize(path: Option<&Path>) -> anyhow::Result<()> {
+    if ACTIVE_THEME.get().is_none() {
+        let theme = load_theme_from_disk(path)?;
+        let _ = ACTIVE_THEME.set(theme);
+    }
+    Ok(())
 }
 
 pub(crate) fn palette() -> Palette {

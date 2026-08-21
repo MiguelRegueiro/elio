@@ -206,6 +206,8 @@ elio reads configuration from:
 | macOS | `~/.config/elio/config.toml` or `~/Library/Application Support/elio/config.toml` |
 | Windows | `%APPDATA%\elio\config.toml` |
 
+Use `elio --config FILE` to load configuration from a custom path instead of the default location.
+
 See [`examples/config.toml`](examples/config.toml) for an annotated example, or the configuration docs:
 https://elio-fm.github.io/docs/configuration/
 
@@ -220,6 +222,8 @@ elio themes are TOML files layered on top of the built-in defaults, so you only 
 | Linux / BSD | `~/.config/elio/theme.toml` or `$XDG_CONFIG_HOME/elio/theme.toml` |
 | macOS | `~/.config/elio/theme.toml` or `~/Library/Application Support/elio/theme.toml` |
 | Windows | `%APPDATA%\elio\theme.toml` |
+
+Use `elio --theme FILE` to load a theme from a custom path instead of the default location.
 
 See [`assets/themes/default/theme.toml`](assets/themes/default/theme.toml) for the full default theme and [`examples/themes/`](examples/themes/) for ready-made themes.
 

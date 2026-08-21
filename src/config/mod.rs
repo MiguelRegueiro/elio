@@ -10,6 +10,7 @@ mod tests;
 mod ui;
 
 use serde::Deserialize;
+use std::path::Path;
 
 pub(crate) use self::invoking_user::env_var as invoking_user_env_var;
 
@@ -52,11 +53,11 @@ struct ConfigFile {
     open: Option<open::OpenConfigOverride>,
 }
 
-pub(crate) fn initialize() {
+pub(crate) fn initialize(path: Option<&Path>) -> anyhow::Result<()> {
     #[cfg(unix)]
     // Snapshot the invocation context before loading config or starting workers.
     let _ = invoking_user::context();
-    loading::initialize();
+    loading::initialize(path)
 }
 
 pub(crate) fn ui() -> UiConfig {

@@ -15,6 +15,8 @@ pub(crate) fn run() -> Result<ExitCode> {
         Command::Run {
             options,
             chooser_file,
+            config_file,
+            theme_file,
             start_focus,
             reveal_hidden_start_focus,
         } => elio::run_with_startup_options(
@@ -22,6 +24,8 @@ pub(crate) fn run() -> Result<ExitCode> {
             start_focus,
             reveal_hidden_start_focus,
             chooser_file,
+            config_file,
+            theme_file,
         )
         .map(run_outcome_exit_code),
         Command::PrintVersion => {
@@ -106,6 +110,8 @@ enum Command {
     Run {
         options: elio::RunOptions,
         chooser_file: Option<PathBuf>,
+        config_file: Option<PathBuf>,
+        theme_file: Option<PathBuf>,
         start_focus: Option<PathBuf>,
         reveal_hidden_start_focus: bool,
     },
@@ -124,6 +130,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
         return Ok(Command::Run {
             options: elio::RunOptions::default(),
             chooser_file: None,
+            config_file: None,
+            theme_file: None,
             start_focus: None,
             reveal_hidden_start_focus: false,
         });
@@ -206,6 +214,8 @@ fn parse_run_args(args: Vec<String>) -> Result<Command> {
     let mut reveal_hidden_start_focus = false;
     let mut cwd_file = None;
     let mut chooser_file = None;
+    let mut config_file = None;
+    let mut theme_file = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -234,6 +244,30 @@ fn parse_run_args(args: Vec<String>) -> Result<Command> {
             continue;
         }
 
+        if path_option_matches(arg, "--config") {
+            if config_file.is_some() {
+                return Err(anyhow::anyhow!(
+                    "error: '--config' cannot be used more than once\n\n{RUN_USAGE}"
+                ));
+            }
+            let (file, next_index) = take_path_option_value(&args, index, "--config")?;
+            config_file = Some(file);
+            index = next_index;
+            continue;
+        }
+
+        if path_option_matches(arg, "--theme") {
+            if theme_file.is_some() {
+                return Err(anyhow::anyhow!(
+                    "error: '--theme' cannot be used more than once\n\n{RUN_USAGE}"
+                ));
+            }
+            let (file, next_index) = take_path_option_value(&args, index, "--theme")?;
+            theme_file = Some(file);
+            index = next_index;
+            continue;
+        }
+
         if arg.starts_with('-') {
             return Err(anyhow::anyhow!(unknown_argument_message(arg)));
         }
@@ -254,6 +288,8 @@ fn parse_run_args(args: Vec<String>) -> Result<Command> {
             cwd_file,
         },
         chooser_file,
+        config_file,
+        theme_file,
         start_focus,
         reveal_hidden_start_focus,
     })
@@ -309,9 +345,11 @@ fn print_help() {
     println!();
     println!("Options:");
     println!("      --chooser-file FILE  Write chosen paths to FILE, or stdout with '-'");
-    println!("      --cwd-file FILE  Write the final current directory to FILE on exit");
-    println!("  -h, --help           Print help");
-    println!("  -V, --version        Print version");
+    println!("      --config FILE        Load configuration from FILE");
+    println!("      --cwd-file FILE      Write the final current directory to FILE on exit");
+    println!("      --theme FILE         Load theme from FILE");
+    println!("  -h, --help               Print help");
+    println!("  -V, --version            Print version");
     println!();
     println!("Commands:");
     println!("  shell init <SHELL>        Print shell integration for bash, zsh, fish, or nu");
@@ -401,6 +439,10 @@ fn unknown_argument_message(arg: &str) -> String {
         message.push_str("\n\n  tip: a similar argument exists: '--cwd-file'");
     } else if arg != "--chooser-file" && "--chooser-file".starts_with(arg) {
         message.push_str("\n\n  tip: a similar argument exists: '--chooser-file'");
+    } else if arg != "--config" && "--config".starts_with(arg) {
+        message.push_str("\n\n  tip: a similar argument exists: '--config'");
+    } else if arg != "--theme" && "--theme".starts_with(arg) {
+        message.push_str("\n\n  tip: a similar argument exists: '--theme'");
     }
 
     message.push_str("\n\n");
@@ -411,7 +453,7 @@ fn unknown_argument_message(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{StartupPath, resolve_startup_path};
+    use super::{Command, StartupPath, parse_args, resolve_startup_path};
     use std::{
         fs,
         path::PathBuf,
@@ -424,6 +466,27 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("elio-cli-{label}-{unique}"))
+    }
+
+    #[test]
+    fn config_and_theme_options_accept_separate_and_inline_paths() {
+        let command = parse_args([
+            "--theme=/tmp/custom-theme.toml".to_string(),
+            "--config".to_string(),
+            "/tmp/custom-config.toml".to_string(),
+        ])
+        .expect("config and theme options should parse");
+
+        let Command::Run {
+            config_file,
+            theme_file,
+            ..
+        } = command
+        else {
+            panic!("config and theme options should produce a run command");
+        };
+        assert_eq!(config_file, Some(PathBuf::from("/tmp/custom-config.toml")));
+        assert_eq!(theme_file, Some(PathBuf::from("/tmp/custom-theme.toml")));
     }
 
     #[test]
