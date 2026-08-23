@@ -1,6 +1,11 @@
 use super::*;
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    ffi::OsString,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\x00";
 const MAX_TABLES: usize = 40;
@@ -37,11 +42,7 @@ pub(in crate::preview) fn build_sqlite_preview(path: &Path) -> Option<PreviewCon
     }
 
     let header = parse_header(&raw);
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
+    let conn = open_preview_connection(path, header.write_version == 2)?;
 
     let palette = theme::palette();
     let mut lines = Vec::new();
@@ -146,6 +147,95 @@ fn read_header_bytes(path: &Path) -> Option<[u8; 100]> {
     let mut buf = [0u8; 100];
     File::open(path).ok()?.read_exact(&mut buf).ok()?;
     Some(buf)
+}
+
+fn open_preview_connection(path: &Path, is_wal: bool) -> Option<Connection> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if !is_wal {
+        return Connection::open_with_flags(path, flags).ok();
+    }
+
+    // SQLite opens sidecars beside the target database, not beside a symlink.
+    let path = path.canonicalize().ok()?;
+    let wal_exists = sidecar_path(&path, "-wal").try_exists().ok()?;
+    let shm_exists = sidecar_path(&path, "-shm").try_exists().ok()?;
+
+    match (wal_exists, shm_exists) {
+        // A partial sidecar set would make SQLite create the missing file.
+        (true, false) | (false, true) => None,
+        // Existing sidecars may contain committed data that immutable mode ignores.
+        (true, true) => Connection::open_with_flags(&path, flags).ok(),
+        // With no sidecars, immutable mode avoids creating empty WAL/SHM files.
+        (false, false) => {
+            Connection::open_with_flags(immutable_uri(&path)?, flags | OpenFlags::SQLITE_OPEN_URI)
+                .ok()
+        }
+    }
+}
+
+fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut sidecar = OsString::from(path.as_os_str());
+    sidecar.push(suffix);
+    PathBuf::from(sidecar)
+}
+
+fn immutable_uri(path: &Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut uri = String::from("file:");
+        append_uri_encoded(&mut uri, path.as_os_str().as_bytes());
+        uri.push_str("?immutable=1");
+        Some(uri)
+    }
+
+    #[cfg(windows)]
+    {
+        let mut normalized = path.to_str()?.replace('\\', "/");
+        if let Some(path) = normalized.strip_prefix("//?/UNC/") {
+            normalized = format!("//{path}");
+        } else if let Some(path) = normalized.strip_prefix("//?/") {
+            normalized = path.to_string();
+        }
+
+        let mut uri = if let Some(unc) = normalized.strip_prefix("//") {
+            let mut uri = String::from("file:////");
+            append_uri_encoded(&mut uri, unc.as_bytes());
+            uri
+        } else if normalized.as_bytes().get(1) == Some(&b':')
+            && normalized.as_bytes().get(2) == Some(&b'/')
+            && normalized.as_bytes()[0].is_ascii_alphabetic()
+        {
+            let mut uri = String::from("file:/");
+            append_uri_encoded(&mut uri, normalized.as_bytes());
+            uri
+        } else {
+            return None;
+        };
+        uri.push_str("?immutable=1");
+        Some(uri)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let mut uri = String::from("file:");
+        append_uri_encoded(&mut uri, path.to_str()?.as_bytes());
+        uri.push_str("?immutable=1");
+        Some(uri)
+    }
+}
+
+fn append_uri_encoded(uri: &mut String, bytes: &[u8]) {
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':') {
+            uri.push(byte as char);
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            uri.push('%');
+            uri.push(HEX[(byte >> 4) as usize] as char);
+            uri.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
 }
 
 fn parse_header(raw: &[u8; 100]) -> SqliteHeader {
@@ -440,4 +530,22 @@ fn muted_line(text: &str, palette: theme::Palette) -> Line<'static> {
         text.to_string(),
         Style::default().fg(palette.muted),
     ))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn immutable_uri_handles_windows_drive_and_unc_paths() {
+        assert_eq!(
+            immutable_uri(Path::new(r"C:\dbs\a #1%.db")).as_deref(),
+            Some("file:/C:/dbs/a%20%231%25.db?immutable=1")
+        );
+        assert_eq!(
+            immutable_uri(Path::new(r"\\server\share\a.db")).as_deref(),
+            Some("file:////server/share/a.db?immutable=1")
+        );
+        assert!(immutable_uri(Path::new(r"C:relative.db")).is_none());
+    }
 }
