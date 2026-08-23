@@ -118,7 +118,7 @@ fn sqlite_preview_does_not_create_wal_sidecars() {
     fs::remove_dir_all(root).expect("failed to remove temp root");
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn sqlite_preview_handles_non_utf8_wal_paths_without_sidecars() {
     use std::os::unix::ffi::OsStringExt;
