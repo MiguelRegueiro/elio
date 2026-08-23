@@ -93,6 +93,138 @@ fn sqlite_preview_shows_header_and_tables() {
 }
 
 #[test]
+fn sqlite_preview_does_not_create_wal_sidecars() {
+    let root = temp_path("sqlite-wal-no-sidecars");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let path = root.join("cash #100%.sqlite");
+    let conn = Connection::open(&path).expect("failed to open sqlite db");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("failed to enable WAL mode");
+    conn.execute("CREATE TABLE items (name TEXT NOT NULL)", [])
+        .expect("failed to create table");
+    drop(conn);
+
+    let wal = root.join("cash #100%.sqlite-wal");
+    let shm = root.join("cash #100%.sqlite-shm");
+    assert!(!wal.exists());
+    assert!(!shm.exists());
+
+    let preview = build_preview(&file_entry(path));
+    let text: Vec<String> = preview.lines().iter().map(line_text).collect();
+    assert!(text.iter().any(|line| line.contains("items")), "{text:?}");
+    assert!(!wal.exists(), "SQLite preview created {}", wal.display());
+    assert!(!shm.exists(), "SQLite preview created {}", shm.display());
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn sqlite_preview_handles_non_utf8_wal_paths_without_sidecars() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = temp_path("sqlite-wal-non-utf8");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let path = root.join(std::ffi::OsString::from_vec(b"cash-\xff.sqlite".to_vec()));
+    let conn = Connection::open(&path).expect("failed to open sqlite db");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("failed to enable WAL mode");
+    conn.execute("CREATE TABLE items (name TEXT NOT NULL)", [])
+        .expect("failed to create table");
+    drop(conn);
+
+    let preview = build_preview(&file_entry(path.clone()));
+    let text: Vec<String> = preview.lines().iter().map(line_text).collect();
+    assert!(text.iter().any(|line| line.contains("items")), "{text:?}");
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let mut shm = path.as_os_str().to_os_string();
+    shm.push("-shm");
+    assert!(!std::path::PathBuf::from(wal).exists());
+    assert!(!std::path::PathBuf::from(shm).exists());
+
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
+fn sqlite_preview_reads_active_wal_and_rejects_partial_sidecars() {
+    let root = temp_path("sqlite-active-wal");
+    let source_dir = root.join("source");
+    let copy_dir = root.join("copy");
+    fs::create_dir_all(&source_dir).expect("failed to create source dir");
+    fs::create_dir_all(&copy_dir).expect("failed to create copy dir");
+    let source = source_dir.join("source.sqlite");
+    let conn = Connection::open(&source).expect("failed to open sqlite db");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("failed to enable WAL mode");
+    conn.pragma_update(None, "wal_autocheckpoint", 0)
+        .expect("failed to disable checkpoints");
+    conn.execute_batch(
+        "CREATE TABLE messages (body TEXT NOT NULL);
+         INSERT INTO messages VALUES ('committed in WAL');",
+    )
+    .expect("failed to populate database");
+
+    let preview = build_preview(&file_entry(source.clone()));
+    let text: Vec<String> = preview.lines().iter().map(line_text).collect();
+    assert!(
+        text.iter().any(|line| line.contains("committed in WAL")),
+        "active WAL data was omitted: {text:?}"
+    );
+
+    let copy = copy_dir.join("copy.sqlite");
+    let copy_wal = copy_dir.join("copy.sqlite-wal");
+    let copy_shm = copy_dir.join("copy.sqlite-shm");
+    fs::copy(&source, &copy).expect("failed to copy database");
+    fs::copy(source_dir.join("source.sqlite-wal"), &copy_wal).expect("failed to copy WAL");
+    assert!(crate::preview::data::build_sqlite_preview(&copy).is_none());
+    assert!(!copy_shm.exists(), "preview created the missing SHM");
+
+    fs::remove_file(&copy_wal).expect("failed to remove WAL");
+    fs::copy(source_dir.join("source.sqlite-shm"), &copy_shm).expect("failed to copy SHM");
+    assert!(crate::preview::data::build_sqlite_preview(&copy).is_none());
+    assert!(!copy_wal.exists(), "preview created the missing WAL");
+
+    drop(conn);
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_preview_reads_active_wal_through_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_path("sqlite-wal-symlink");
+    fs::create_dir_all(&root).expect("failed to create temp root");
+    let source = root.join("source.sqlite");
+    let link = root.join("linked.sqlite");
+    let conn = Connection::open(&source).expect("failed to open sqlite db");
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .expect("failed to enable WAL mode");
+    conn.pragma_update(None, "wal_autocheckpoint", 0)
+        .expect("failed to disable checkpoints");
+    conn.execute_batch(
+        "CREATE TABLE messages (body TEXT NOT NULL);
+         INSERT INTO messages VALUES ('visible through symlink');",
+    )
+    .expect("failed to populate database");
+    symlink(&source, &link).expect("failed to create symlink");
+
+    let preview = build_preview(&file_entry(link));
+    let text: Vec<String> = preview.lines().iter().map(line_text).collect();
+    assert!(
+        text.iter()
+            .any(|line| line.contains("visible through symlink")),
+        "symlink preview omitted WAL data: {text:?}"
+    );
+    assert!(!root.join("linked.sqlite-wal").exists());
+    assert!(!root.join("linked.sqlite-shm").exists());
+
+    drop(conn);
+    fs::remove_dir_all(root).expect("failed to remove temp root");
+}
+
+#[test]
 fn sqlite_preview_shows_views() {
     let root = temp_path("sqlite-view");
     fs::create_dir_all(&root).expect("failed to create temp root");
