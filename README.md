@@ -24,6 +24,7 @@ Snappy, batteries-included terminal file manager with rich previews, inline imag
 - **Kitty drag and drop** — drop files into elio and drag them out in Kitty 0.47+
 - **Grid and list views** — switch with `v`, zoom the grid with `Ctrl++` / `Ctrl+-`
 - **Fuzzy find** — find folders and files quickly
+- **Duplicate Finder** — find and safely manage files with identical contents
 - **Zoxide jumps** — jump to frequent directories from your zoxide history
 - **Shell integration** — install cd-on-exit wrappers for bash, zsh, fish, and Nushell
 - **Theming** — full palette and file-class control via `theme.toml`

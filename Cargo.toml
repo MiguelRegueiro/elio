@@ -1,6 +1,6 @@
 [package]
 name = "elio"
-version = "1.11.2"
+version = "1.12.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Snappy, batteries-included terminal file manager with rich previews, inline images, bulk actions, and trash support."

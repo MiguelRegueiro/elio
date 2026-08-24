@@ -1,5 +1,5 @@
 %bcond_with check
-%global fallback_version 1.11.2
+%global fallback_version 1.12.0
 %global fallback_release 1
 
 Name:           elio
@@ -53,6 +53,12 @@ desktop-file-validate packaging/linux/%{name}.desktop
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
 
 %changelog
+* Mon Aug 24 2026 Miguel Regueiro <miguelpr4242@gmail.com> - 1.12.0-1
+- Add Duplicate Finder, bulk archive extraction, and preview pane controls
+- Add invoking-user-aware sudo/doas sessions and config/theme path overrides
+- Add a Nord example theme and improve chooser and image preview behavior
+- Fix pasted input, SQLite sidecar creation, and macOS Trash restore collisions
+
 * Wed Jul 22 2026 Miguel Regueiro <miguelpr4242@gmail.com> - 1.11.2-1
 - Fix 32-bit builds by avoiding overflow in compact directory count formatting
 

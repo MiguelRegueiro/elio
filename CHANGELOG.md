@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-24
+
 ### Added
 
 - Added Duplicate Finder to find files with identical contents, regardless of name, and safely trash, delete, rename, open, or reveal them. ([#258])
+- Added `arm64` Linux release archives and Debian package assets, including publishing through the official apt repository.
 - Added a configurable `toggle_preview` (`V`) shortcut to show or hide the preview pane. ([#251])
 - Added a configurable `fullscreen_preview` (`P`) shortcut to temporarily expand the preview pane.
 - Added bulk archive extraction for selected archives. ([#241])
+- Added image preview support inside Zellij 0.45+ when using Kitty, Ghostty, or WezTerm. ([#85])
 - Added a Nord example theme. ([#270])
 - Added invoking-user-aware `sudo` and `doas` sessions on Unix: elio retains elevated filesystem access while using the invoking user's config, Places, shell, applications, editor, zoxide, and Trash/Restore; direct-root sessions continue using root's state.
 - Added `--config FILE` and `--theme FILE` to override the default configuration and theme paths. ([#274])
@@ -29,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed image previews disappearing after returning from actions that suspend and restore the TUI.
 - Fixed pasted text being handled as normal keystrokes.
 - Fixed stretched image previews in Kitty graphics environments that do not preserve placeholder aspect ratios. ([#267])
+- Fixed restoring files on macOS when Trash renamed them to avoid name collisions.
 - Fixed SQLite previews creating missing `-wal` and `-shm` sidecar files for WAL-mode databases. ([#278])
 
 ## [1.11.2] - 2026-07-22
@@ -315,7 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trash and restore support for safer file management workflows.
 - Optional external-tool integrations such as Poppler, ffmpeg, ffprobe, resvg, and 7-Zip for richer previews and metadata.
 
-[Unreleased]: https://github.com/elio-fm/elio/compare/v1.11.2...HEAD
+[Unreleased]: https://github.com/elio-fm/elio/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/elio-fm/elio/compare/v1.11.2...v1.12.0
 [1.11.2]: https://github.com/elio-fm/elio/compare/v1.11.1...v1.11.2
 [1.11.1]: https://github.com/elio-fm/elio/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/elio-fm/elio/compare/v1.10.0...v1.11.0
@@ -369,6 +375,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#103]: https://github.com/elio-fm/elio/issues/103
 [#90]: https://github.com/elio-fm/elio/issues/90
 [#86]: https://github.com/elio-fm/elio/issues/86
+[#85]: https://github.com/elio-fm/elio/issues/85
 [#84]: https://github.com/elio-fm/elio/issues/84
 [#79]: https://github.com/elio-fm/elio/issues/79
 [#77]: https://github.com/elio-fm/elio/pull/77
