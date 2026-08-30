@@ -4,6 +4,7 @@ use std::{
     env,
     ffi::OsStr,
     fs, io,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -331,30 +332,80 @@ fn print_version() {
 }
 
 fn print_help() {
-    println!("elio {}", env!("CARGO_PKG_VERSION"));
-    println!();
-    println!("{RUN_USAGE}");
-    println!("       elio shell init <SHELL>");
-    println!("       elio shell install [SHELL]");
-    println!("       elio shell uninstall [SHELL]");
-    println!();
-    println!("Arguments:");
-    println!(
-        "  [PATH]               Start in a directory, or focus a file in its parent directory"
-    );
-    println!();
-    println!("Options:");
-    println!("      --chooser-file FILE  Write chosen paths to FILE, or stdout with '-'");
-    println!("      --config FILE        Load configuration from FILE");
-    println!("      --cwd-file FILE      Write the final current directory to FILE on exit");
-    println!("      --theme FILE         Load theme from FILE");
-    println!("  -h, --help               Print help");
-    println!("  -V, --version            Print version");
-    println!();
-    println!("Commands:");
-    println!("  shell init <SHELL>        Print shell integration for bash, zsh, fish, or nu");
-    println!("  shell install [SHELL]    Install shell integration for bash, zsh, fish, or nu");
-    println!("  shell uninstall [SHELL]  Remove shell integration for bash, zsh, fish, or nu");
+    print!("{}", help_text(help_style_enabled()));
+}
+
+#[derive(Clone, Copy)]
+struct HelpStyle {
+    heading: &'static str,
+    literal: &'static str,
+    link: &'static str,
+    reset: &'static str,
+}
+
+impl HelpStyle {
+    const PLAIN: Self = Self {
+        heading: "",
+        literal: "",
+        link: "",
+        reset: "",
+    };
+
+    const ANSI: Self = Self {
+        heading: "\x1b[1m",
+        literal: "\x1b[36m",
+        link: "\x1b[4;36m",
+        reset: "\x1b[0m",
+    };
+}
+
+fn help_style_enabled() -> bool {
+    io::stdout().is_terminal()
+        && env::var_os("NO_COLOR").is_none()
+        && env::var_os("TERM").is_none_or(|term| term != "dumb")
+}
+
+fn help_text(styled: bool) -> String {
+    let style = if styled {
+        HelpStyle::ANSI
+    } else {
+        HelpStyle::PLAIN
+    };
+    let HelpStyle {
+        heading,
+        literal,
+        link,
+        reset,
+    } = style;
+    format!(
+        concat!(
+            "{heading}Usage:{reset} {literal}elio{reset} [OPTIONS] [PATH]\n",
+            "\n",
+            "{heading}Arguments:{reset}\n",
+            "  [PATH]  Start in a directory, or focus a file in its parent directory\n",
+            "\n",
+            "{heading}Options:{reset}\n",
+            "      {literal}--chooser-file{reset} <FILE>     Write selected paths to FILE; use \"-\" for stdout\n",
+            "      {literal}--config{reset} <FILE>           Load configuration from FILE\n",
+            "      {literal}--cwd-file{reset} <FILE>         Write the final directory to FILE on exit\n",
+            "      {literal}--theme{reset} <FILE>            Load a theme from FILE\n",
+            "  {literal}-h, --help{reset}                    Print help\n",
+            "  {literal}-V, --version{reset}                 Print version\n",
+            "\n",
+            "{heading}Shell integration:{reset}\n",
+            "  {literal}elio shell init{reset} <SHELL>       Print shell integration code\n",
+            "  {literal}elio shell install{reset} [SHELL]    Install integration; detect shell when omitted\n",
+            "  {literal}elio shell uninstall{reset} [SHELL]  Remove integration; detect shell when omitted\n",
+            "\n",
+            "  Supported shells: bash, zsh, fish, nu\n",
+            "\n",
+            "{heading}CLI documentation:{reset} {link}https://elio-fm.github.io/docs/cli/{reset}\n",
+        ),
+        heading = heading,
+        literal = literal,
+        link = link,
+        reset = reset,
+    )
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -453,7 +504,7 @@ fn unknown_argument_message(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, StartupPath, parse_args, resolve_startup_path};
+    use super::{Command, StartupPath, help_text, parse_args, resolve_startup_path};
     use std::{
         fs,
         path::PathBuf,
@@ -466,6 +517,16 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("elio-cli-{label}-{unique}"))
+    }
+
+    #[test]
+    fn styled_help_applies_semantic_terminal_styles() {
+        let help = help_text(true);
+
+        assert!(help.contains("\x1b[1mUsage:\x1b[0m \x1b[36melio\x1b[0m [OPTIONS] [PATH]"));
+        assert!(help.contains("\x1b[36m--chooser-file\x1b[0m"));
+        assert!(help.contains("\x1b[36m--chooser-file\x1b[0m <FILE>"));
+        assert!(help.contains("\x1b[4;36mhttps://elio-fm.github.io/docs/cli/\x1b[0m"));
     }
 
     #[test]

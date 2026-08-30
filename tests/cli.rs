@@ -28,36 +28,36 @@ fn help_prints_usage() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage: elio [OPTIONS] [PATH]"));
-    assert!(stdout.contains("       elio shell init <SHELL>"));
-    assert!(stdout.contains("       elio shell uninstall [SHELL]"));
     assert!(stdout.contains("Arguments:"));
-    assert!(stdout.contains(
-        "[PATH]               Start in a directory, or focus a file in its parent directory"
-    ));
-    assert!(stdout.contains("--chooser-file FILE  Write chosen paths to FILE, or stdout with '-'"));
-    assert!(stdout.contains("--config FILE        Load configuration from FILE"));
     assert!(
-        stdout.contains("--cwd-file FILE      Write the final current directory to FILE on exit")
+        stdout.contains("[PATH]  Start in a directory, or focus a file in its parent directory")
     );
-    assert!(stdout.contains("--theme FILE         Load theme from FILE"));
-    assert!(stdout.contains("-h, --help               Print help"));
-    assert!(stdout.contains("-V, --version            Print version"));
-    assert!(stdout.contains("Commands:"));
     assert!(
         stdout.contains(
-            "shell init <SHELL>        Print shell integration for bash, zsh, fish, or nu"
+            "--chooser-file <FILE>     Write selected paths to FILE; use \"-\" for stdout"
+        )
+    );
+    assert!(stdout.contains("--config <FILE>           Load configuration from FILE"));
+    assert!(stdout.contains("--cwd-file <FILE>         Write the final directory to FILE on exit"));
+    assert!(stdout.contains("--theme <FILE>            Load a theme from FILE"));
+    assert!(stdout.contains("-h, --help                    Print help"));
+    assert!(stdout.contains("-V, --version                 Print version"));
+    assert!(stdout.contains("Shell integration:"));
+    assert!(stdout.contains("elio shell init <SHELL>       Print shell integration code"));
+    assert!(
+        stdout.contains(
+            "elio shell install [SHELL]    Install integration; detect shell when omitted"
         )
     );
     assert!(
         stdout.contains(
-            "shell install [SHELL]    Install shell integration for bash, zsh, fish, or nu"
+            "elio shell uninstall [SHELL]  Remove integration; detect shell when omitted"
         )
     );
-    assert!(
-        stdout.contains(
-            "shell uninstall [SHELL]  Remove shell integration for bash, zsh, fish, or nu"
-        )
-    );
+    assert!(stdout.contains("Supported shells: bash, zsh, fish, nu"));
+    assert!(stdout.contains("CLI documentation: https://elio-fm.github.io/docs/cli/"));
+    assert!(!stdout.contains(env!("CARGO_PKG_VERSION")));
+    assert!(!stdout.contains("\x1b["));
     assert!(output.stderr.is_empty());
 }
 
