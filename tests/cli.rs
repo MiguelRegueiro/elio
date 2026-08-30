@@ -62,6 +62,63 @@ fn help_prints_usage() {
 }
 
 #[test]
+fn shell_help_is_available_for_group_and_subcommands() {
+    let cases: &[(&[&str], &str, &[&str])] = &[
+        (
+            &["shell"],
+            "Usage: elio shell <COMMAND>",
+            &[
+                "Commands:",
+                "init <SHELL>       Print shell integration code",
+                "install [SHELL]    Install integration; detect shell when omitted",
+                "uninstall [SHELL]  Remove integration; detect shell when omitted",
+            ],
+        ),
+        (
+            &["shell", "init"],
+            "Usage: elio shell init <SHELL>",
+            &["<SHELL>  Target shell: bash, zsh, fish, or nu"],
+        ),
+        (
+            &["shell", "install"],
+            "Usage: elio shell install [SHELL]",
+            &["[SHELL]  Target shell (bash, zsh, fish, or nu); detected when omitted"],
+        ),
+        (
+            &["shell", "uninstall"],
+            "Usage: elio shell uninstall [SHELL]",
+            &["[SHELL]  Target shell (bash, zsh, fish, or nu); detected when omitted"],
+        ),
+    ];
+
+    for &(context, usage, expected_lines) in cases {
+        for help_flag in ["-h", "--help"] {
+            let output = elio()
+                .args(context)
+                .arg(help_flag)
+                .output()
+                .expect("failed to run shell help command");
+
+            assert!(
+                output.status.success(),
+                "elio {} {help_flag} should succeed",
+                context.join(" ")
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains(usage));
+            for &expected in expected_lines {
+                assert!(stdout.contains(expected));
+            }
+            assert!(stdout.contains(
+                "Shell integration documentation: https://elio-fm.github.io/docs/shell-integration/"
+            ));
+            assert!(!stdout.contains("\x1b["));
+            assert!(output.stderr.is_empty());
+        }
+    }
+}
+
+#[test]
 fn mistyped_version_flag_exits_with_suggestion() {
     let output = elio().arg("--v").output().expect("failed to run elio --v");
 
