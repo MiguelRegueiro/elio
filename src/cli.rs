@@ -10,6 +10,7 @@ use std::{
 };
 
 const RUN_USAGE: &str = "Usage: elio [OPTIONS] [PATH]";
+const SHELL_INTEGRATION_DOCS: &str = "https://elio-fm.github.io/docs/shell-integration/";
 
 pub(crate) fn run() -> Result<ExitCode> {
     match parse_args(env::args().skip(1))? {
@@ -33,8 +34,8 @@ pub(crate) fn run() -> Result<ExitCode> {
             print_version();
             Ok(ExitCode::SUCCESS)
         }
-        Command::PrintHelp => {
-            print_help();
+        Command::PrintHelp(topic) => {
+            print_help(topic);
             Ok(ExitCode::SUCCESS)
         }
         Command::UserFsHelper => elio::run_user_fs_helper().map(|()| ExitCode::SUCCESS),
@@ -117,11 +118,20 @@ enum Command {
         reveal_hidden_start_focus: bool,
     },
     PrintVersion,
-    PrintHelp,
+    PrintHelp(HelpTopic),
     PrintShellInit(Shell),
     InstallShellIntegration(Option<Shell>),
     UninstallShellIntegration(Option<Shell>),
     UserFsHelper,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HelpTopic {
+    Root,
+    Shell,
+    ShellInit,
+    ShellInstall,
+    ShellUninstall,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
@@ -141,12 +151,30 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
     match args.as_slice() {
         [arg] if arg == "--internal-user-fs-helper" => return Ok(Command::UserFsHelper),
         [arg] if arg == "--version" || arg == "-V" => return Ok(Command::PrintVersion),
-        [arg] if arg == "--help" || arg == "-h" => return Ok(Command::PrintHelp),
+        [arg] if is_help(arg) => return Ok(Command::PrintHelp(HelpTopic::Root)),
         [arg, unexpected, ..] if arg == "--version" || arg == "-V" => {
             return Err(anyhow::anyhow!(unknown_argument_message(unexpected)));
         }
-        [arg, unexpected, ..] if arg == "--help" || arg == "-h" => {
+        [arg, unexpected, ..] if is_help(arg) => {
             return Err(anyhow::anyhow!(unknown_argument_message(unexpected)));
+        }
+        [command, help] if command == "shell" && is_help(help) => {
+            return Ok(Command::PrintHelp(HelpTopic::Shell));
+        }
+        [command, subcommand, help]
+            if command == "shell" && subcommand == "init" && is_help(help) =>
+        {
+            return Ok(Command::PrintHelp(HelpTopic::ShellInit));
+        }
+        [command, subcommand, help]
+            if command == "shell" && subcommand == "install" && is_help(help) =>
+        {
+            return Ok(Command::PrintHelp(HelpTopic::ShellInstall));
+        }
+        [command, subcommand, help]
+            if command == "shell" && subcommand == "uninstall" && is_help(help) =>
+        {
+            return Ok(Command::PrintHelp(HelpTopic::ShellUninstall));
         }
         [command, subcommand, shell] if command == "shell" && subcommand == "init" => {
             return Shell::parse(shell)
@@ -207,6 +235,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command> {
     }
 
     parse_run_args(args)
+}
+
+fn is_help(arg: &str) -> bool {
+    arg == "--help" || arg == "-h"
 }
 
 fn parse_run_args(args: Vec<String>) -> Result<Command> {
@@ -331,8 +363,8 @@ fn print_version() {
     println!("elio {}", env!("CARGO_PKG_VERSION"));
 }
 
-fn print_help() {
-    print!("{}", help_text(help_style_enabled()));
+fn print_help(topic: HelpTopic) {
+    print!("{}", help_text(topic, help_style_enabled()));
 }
 
 #[derive(Clone, Copy)]
@@ -365,12 +397,37 @@ fn help_style_enabled() -> bool {
         && env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
-fn help_text(styled: bool) -> String {
+fn help_text(topic: HelpTopic, styled: bool) -> String {
     let style = if styled {
         HelpStyle::ANSI
     } else {
         HelpStyle::PLAIN
     };
+    match topic {
+        HelpTopic::Root => root_help_text(style),
+        HelpTopic::Shell => shell_help_text(style),
+        HelpTopic::ShellInit => shell_command_help_text(
+            style,
+            "init",
+            "<SHELL>",
+            "Target shell: bash, zsh, fish, or nu",
+        ),
+        HelpTopic::ShellInstall => shell_command_help_text(
+            style,
+            "install",
+            "[SHELL]",
+            "Target shell (bash, zsh, fish, or nu); detected when omitted",
+        ),
+        HelpTopic::ShellUninstall => shell_command_help_text(
+            style,
+            "uninstall",
+            "[SHELL]",
+            "Target shell (bash, zsh, fish, or nu); detected when omitted",
+        ),
+    }
+}
+
+fn root_help_text(style: HelpStyle) -> String {
     let HelpStyle {
         heading,
         literal,
@@ -404,6 +461,70 @@ fn help_text(styled: bool) -> String {
         heading = heading,
         literal = literal,
         link = link,
+        reset = reset,
+    )
+}
+
+fn shell_help_text(style: HelpStyle) -> String {
+    let HelpStyle {
+        heading,
+        literal,
+        link,
+        reset,
+    } = style;
+    format!(
+        concat!(
+            "{heading}Usage:{reset} {literal}elio shell{reset} <COMMAND>\n",
+            "\n",
+            "{heading}Commands:{reset}\n",
+            "  {literal}init{reset} <SHELL>       Print shell integration code\n",
+            "  {literal}install{reset} [SHELL]    Install integration; detect shell when omitted\n",
+            "  {literal}uninstall{reset} [SHELL]  Remove integration; detect shell when omitted\n",
+            "\n",
+            "{heading}Options:{reset}\n",
+            "  {literal}-h, --help{reset}  Print help\n",
+            "\n",
+            "{heading}Shell integration documentation:{reset} {link}{docs}{reset}\n",
+        ),
+        heading = heading,
+        literal = literal,
+        link = link,
+        docs = SHELL_INTEGRATION_DOCS,
+        reset = reset,
+    )
+}
+
+fn shell_command_help_text(
+    style: HelpStyle,
+    command: &str,
+    shell_argument: &str,
+    argument_description: &str,
+) -> String {
+    let HelpStyle {
+        heading,
+        literal,
+        link,
+        reset,
+    } = style;
+    format!(
+        concat!(
+            "{heading}Usage:{reset} {literal}elio shell {command}{reset} {shell_argument}\n",
+            "\n",
+            "{heading}Arguments:{reset}\n",
+            "  {shell_argument}  {argument_description}\n",
+            "\n",
+            "{heading}Options:{reset}\n",
+            "  {literal}-h, --help{reset}  Print help\n",
+            "\n",
+            "{heading}Shell integration documentation:{reset} {link}{docs}{reset}\n",
+        ),
+        heading = heading,
+        literal = literal,
+        command = command,
+        shell_argument = shell_argument,
+        argument_description = argument_description,
+        link = link,
+        docs = SHELL_INTEGRATION_DOCS,
         reset = reset,
     )
 }
@@ -504,7 +625,7 @@ fn unknown_argument_message(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, StartupPath, help_text, parse_args, resolve_startup_path};
+    use super::{Command, HelpTopic, StartupPath, help_text, parse_args, resolve_startup_path};
     use std::{
         fs,
         path::PathBuf,
@@ -521,12 +642,19 @@ mod tests {
 
     #[test]
     fn styled_help_applies_semantic_terminal_styles() {
-        let help = help_text(true);
+        let help = help_text(HelpTopic::Root, true);
 
         assert!(help.contains("\x1b[1mUsage:\x1b[0m \x1b[36melio\x1b[0m [OPTIONS] [PATH]"));
         assert!(help.contains("\x1b[36m--chooser-file\x1b[0m"));
         assert!(help.contains("\x1b[36m--chooser-file\x1b[0m <FILE>"));
         assert!(help.contains("\x1b[4;36mhttps://elio-fm.github.io/docs/cli/\x1b[0m"));
+
+        let shell_help = help_text(HelpTopic::ShellInstall, true);
+        assert!(shell_help.contains("\x1b[36melio shell install\x1b[0m [SHELL]"));
+        assert!(
+            shell_help
+                .contains("\x1b[4;36mhttps://elio-fm.github.io/docs/shell-integration/\x1b[0m")
+        );
     }
 
     #[test]

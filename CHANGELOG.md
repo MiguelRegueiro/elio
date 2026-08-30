@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improved `--help` with cleaner formatting, terminal colors, and a link to the CLI documentation.
 
+### Fixed
+
+- Fixed `-h` and `--help` for shell integration commands.
+
 ## [1.12.0] - 2026-08-24
 
 ### Added
